@@ -17,6 +17,7 @@ from gaston.neural_net import GASTON
 from sklearn import preprocessing
 from sklearn.metrics import mean_squared_error
 import scanpy as sc
+from scipy import sparse
 
 # ============================================================
 # 0. PARSE SWEEP ARGS
@@ -51,7 +52,8 @@ print(f"Device detected: {device}", flush=True)
 ROOT = "/scratch/uchitra1/datasets/spatial-RNA/visiumhd/mouse_kidney_visium"
 print("Loading data...", flush=True)
 S_np = np.load(f"{ROOT}/coords_mat.npy")              # (N, 2)
-A_raw = np.load(f"{ROOT}/counts_mat_hvg5000.npy")
+#A_raw = np.load(f"{ROOT}/counts_mat_hvg5000.npy")
+A_raw = sparse.load_npz(f"{ROOT}/counts_mat_hvg5000.npz")
 
 print(f"S shape = {S_np.shape}", flush=True)
 print(f"Count matrix shape = {A_raw.shape}", flush=True)
@@ -151,7 +153,8 @@ class Decoder(nn.Module):
     def forward(self, z):
         h = self.net(z)
         logits = self.mu_raw(h)
-        p = torch.softmax(logits, dim=-1) +  1e-4
+        p = nn.functional.softplus(logits) + 1e-8
+        #p = torch.softmax(logits, dim=-1) + 1e-8
         return p
 
 
@@ -181,22 +184,32 @@ class VAE(nn.Module):
             self.encoder = Encoder_q_z_given_x(g_dim, z_dim, hidden_dim)
         else:  # C, F
             self.encoder = Encoder_q_z_given_s(s_dim, z_dim, hidden_dim)
+        
+        self.learned_prior = variant in ["D", "E", "F"]
+        if self.learned_prior:
+            self.prior_net = SpatialPrior(s_dim, z_dim, hidden_dim)
 
         self.decoder = Decoder(z_dim, g_dim, hidden_dim)
         self.z_dim = z_dim
 
     def model(self, x, s, beta=1e-20):
         pyro.module("decoder", self.decoder)
+        if self.learned_prior:
+            pyro.module("prior_net", self.prior_net)
 
         # gene-specific dispersion (theta_g > 0)
         theta_g = pyro.param("theta_g", x.new_ones((x.shape[1],)), constraint=dist.constraints.positive)
 
         with pyro.plate("data", x.shape[0]):
-            mu_p = x.new_zeros((x.shape[0], self.z_dim))
-            sigma_p = x.new_ones((x.shape[0], self.z_dim))
+            if self.learned_prior:
+                mu_p, sigma_p = self.prior_net(s)
+            else:
+                mu_p = x.new_zeros((x.shape[0], self.z_dim))
+                sigma_p = x.new_ones((x.shape[0], self.z_dim))
+                
             with pyro.poutine.scale(scale=beta):
                 z = pyro.sample("z", dist.Normal(mu_p, sigma_p).to_event(1))
-
+                
             # mu learned by decoder
             mu = self.decoder(z)   
             # broadcast theta across cells
@@ -404,7 +417,8 @@ class LogFrequencyPositionalEncoding(nn.Module):
 # PREPARE DATA
 # ============================================================
 print("Preparing data tensors...", flush=True)
-X_cpu = torch.tensor(A_raw, dtype=torch.float32)
+#X_cpu = torch.tensor(A_raw, dtype=torch.float32)
+X_cpu = torch.tensor(A_raw.toarray(), dtype=torch.float32)
 S_cpu = torch.tensor(S_np, dtype=torch.float32)
 
 X_full = X_cpu.to(device)
