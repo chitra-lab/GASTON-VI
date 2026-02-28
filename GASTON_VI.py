@@ -119,36 +119,6 @@ def iterate_minibatches(X, S, batch_size, shuffle=True):
 # ============================================================
 # 4. VAE MODELS
 # ============================================================
-class Encoder_q_z_given_x(nn.Module):
-    def __init__(self, g_dim, z_dim, hidden_dim=32):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(g_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU()
-        )
-        self.mu = nn.Linear(hidden_dim, z_dim)
-        self.log_sigma = nn.Linear(hidden_dim, z_dim)
-
-    def forward(self, x, s=None):
-        h = self.net(x)
-        return self.mu(h), torch.exp(self.log_sigma(h))
-
-
-class Encoder_q_z_given_xs(nn.Module):
-    def __init__(self, g_dim, s_dim, z_dim, hidden_dim=32):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(g_dim + s_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU()
-        )
-        self.mu = nn.Linear(hidden_dim, z_dim)
-        self.log_sigma = nn.Linear(hidden_dim, z_dim)
-
-    def forward(self, x, s):
-        h = self.net(torch.cat([x, s], dim=1))
-        return self.mu(h), torch.exp(self.log_sigma(h))
-
-
 class Encoder_q_z_given_s(nn.Module):
     def __init__(self, s_dim, z_dim, hidden_dim=32):
         super().__init__()
@@ -206,15 +176,10 @@ class VAE(nn.Module):
         self.likelihood = likelihood
 
         # --- encoder ---
-        if variant in ["A", "D"]:
-            self.encoder = Encoder_q_z_given_xs(g_dim, s_dim, z_dim, hidden_dim)
-        elif variant in ["B", "E"]:
-            self.encoder = Encoder_q_z_given_x(g_dim, z_dim, hidden_dim)
-        else:  # C, F
-            self.encoder = Encoder_q_z_given_s(s_dim, z_dim, hidden_dim)
+        self.encoder = Encoder_q_z_given_s(s_dim, z_dim, hidden_dim)
 
         # --- prior: fixed standard normal ---
-        print("USING FIXED (STANDARD NORMAL) PRIOR", flush=True)
+        print("USING FIXED PRIOR", flush=True)
 
         # --- decoder ---
         if likelihood == "gaussian":
