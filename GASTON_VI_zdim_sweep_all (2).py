@@ -36,7 +36,7 @@ parser.add_argument("--num_freqs", type=int, required=True,
     help="Number of positional encoding frequencies")
 parser.add_argument("--beta", type=float, required=True,
     help="KL weight for spatial latent d_i")
-parser.add_argument("--epochs", type=int, default=175)
+parser.add_argument("--epochs", type=int, default=500)
 parser.add_argument("--repeats", type=int, default=1)
 parser.add_argument("--batch_size", type=int, required=True)
 parser.add_argument("--val_frac", type=float, default=0.3,
@@ -229,6 +229,7 @@ class LogFrequencyPositionalEncoding(nn.Module):
         cos   = torch.cos(s_exp)
         return torch.cat([s, torch.cat([sin, cos], dim=-1).flatten(-2)], dim=-1)
 
+
 # ============================================================
 # 4. MODEL COMPONENTS
 # ============================================================
@@ -236,8 +237,8 @@ class SpatialEncoder(nn.Module):
     def __init__(self, s_dim, d_dim, hidden_dim=32):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(s_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(s_dim, hidden_dim), nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.SiLU(),
         )
         self.mu        = nn.Linear(hidden_dim, d_dim)
         self.log_sigma = nn.Linear(hidden_dim, d_dim)
@@ -248,7 +249,7 @@ class SpatialEncoder(nn.Module):
 
 
 class BiologicalEncoder(nn.Module):
-    def __init__(self, g_dim, z_dim, n_layers=1, n_hidden=128, dropout_rate=0.1):
+    def __init__(self, g_dim, z_dim, n_layers=2, n_hidden=128, dropout_rate=0.1):
         super().__init__()
         self.encoder = scviEncoder(
             n_input=g_dim, n_output=z_dim,
@@ -262,7 +263,7 @@ class BiologicalEncoder(nn.Module):
 
 
 class LibrarySizeEncoder(nn.Module):
-    def __init__(self, g_dim, n_layers=1, n_hidden=128, dropout_rate=0.1):
+    def __init__(self, g_dim, n_layers=2, n_hidden=128, dropout_rate=0.1):
         super().__init__()
         self.encoder = scviEncoder(
             n_input=g_dim, n_output=1,
@@ -278,10 +279,10 @@ class LibrarySizeEncoder(nn.Module):
 class CombinedDecoder(nn.Module):
     def __init__(self, d_dim, z_dim, g_dim, hidden_dim=128):
         super().__init__()
-        in_dim   = d_dim + z_dim
+        in_dim = d_dim + z_dim
         self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(in_dim, hidden_dim), nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.SiLU(),
         )
         self.rho_logits = nn.Linear(hidden_dim, g_dim)
 
@@ -499,8 +500,8 @@ for rep in range(REPEATS):
     vae = GASTON_scVI_zdim(
         g_dim=G, s_dim=s_dim, d_dim=1, z_dim=z_bio_dim,
         hidden_dim_spatial=20,
-        n_layers_bio=1, n_hidden_bio=128,
-        n_layers_lib=1, n_hidden_lib=128,
+        n_layers_bio=2, n_hidden_bio=128,
+        n_layers_lib=2, n_hidden_lib=128,
         dropout_rate=0.1,
         hidden_dim_decoder=20,
         log_lib_mean=log_lib_mean, log_lib_var=log_lib_var,
@@ -560,9 +561,9 @@ for rep in range(REPEATS):
         "model_kwargs": {
             "g_dim": G, "s_dim": s_dim, "d_dim": 1, "z_dim": z_bio_dim,
             "hidden_dim_spatial": 20,
-            "n_layers_bio": 1, "n_hidden_bio": 128,
-            "n_layers_lib": 1, "n_hidden_lib": 128,
-            "dropout_rate": 0.1, "hidden_dim_decoder": 128,
+            "n_layers_bio": 2, "n_hidden_bio": 128,
+            "n_layers_lib": 2, "n_hidden_lib": 128,
+            "dropout_rate": 0.1, "hidden_dim_decoder": 20,
             "log_lib_mean": log_lib_mean, "log_lib_var": log_lib_var,
             "beta": beta,
         },
