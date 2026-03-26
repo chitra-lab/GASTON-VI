@@ -296,8 +296,8 @@ class CombinedDecoder(nn.Module):
 class GASTON_scVI_zdim(nn.Module):
     def __init__(self, g_dim, s_dim, d_dim=1, z_dim=10,
                  hidden_dim_spatial=20,
-                 n_layers_bio=1, n_hidden_bio=128,
-                 n_layers_lib=1, n_hidden_lib=128,
+                 n_layers_bio=2, n_hidden_bio=128,
+                 n_layers_lib=2, n_hidden_lib=128,
                  dropout_rate=0.1,
                  hidden_dim_decoder=20,
                  log_lib_mean=0.0, log_lib_var=1.0,
