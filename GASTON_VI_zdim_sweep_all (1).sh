@@ -11,9 +11,9 @@
 
 # ============================================================
 # Usage:
-#   sbatch --export=DATASET=kidney GASTON_VI_zdim_sweep.sh
-#   sbatch --export=DATASET=liver  GASTON_VI_zdim_sweep.sh
-#   sbatch --export=DATASET=tonsil GASTON_VI_zdim_sweep.sh
+#   sbatch --export=DATASET=kidney GASTON_VI_zdim_sweep_all.sh
+#   sbatch --export=DATASET=liver  GASTON_VI_zdim_sweep_all.sh
+#   sbatch --export=DATASET=tonsil GASTON_VI_zdim_sweep_all.sh
 #
 # DATASET defaults to "kidney" if not provided.
 # ============================================================
