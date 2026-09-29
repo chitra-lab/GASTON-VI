@@ -1,4 +1,4 @@
-pe#!/bin/bash
+#!/bin/bash
 #SBATCH --job-name=pe_unified
 #SBATCH --output=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/logs/unified_%j.out
 #SBATCH --error=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/logs/unified_%j.err
