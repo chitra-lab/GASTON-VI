@@ -13,7 +13,7 @@ and `z` carries the rest of the biological variation.
 | `gaston_vi/pe/` | positional-encoding modules, the band heuristic, the `--pe_auto` resolver and its cache |
 | `gaston_vi/viz/` | isodepth, latent and loss plots |
 | `smoke_test.py` | exercises every package entry point on synthetic arrays in ~10 s |
-| `run_unified.slurm` | one run; edit the block at the top and `sbatch` |
+| `train.slurm` | slurm wrapper for one `train.py` run; edit the parameter block at the top and `sbatch` |
 | `old_code/GASTON_VI.py` | the previous single-script implementation, kept as the reference |
 | `old_code/GASTON_VI.slurm` | its runner (note: it invokes an absolute path in the original project tree, not the file beside it) |
 
@@ -40,7 +40,7 @@ The slurm runners resolve the code location from `CODE_DIR`, which defaults to
 this checkout; override it to run a different one:
 
 ```bash
-CODE_DIR=/path/to/GASTON-VI sbatch run_unified.slurm
+CODE_DIR=/path/to/GASTON-VI sbatch train.slurm
 ```
 
 ## Positional-encoding bands

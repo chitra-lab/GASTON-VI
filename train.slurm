@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=pe_unified
+#SBATCH --job-name=gaston_vi_train
 #SBATCH --output=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/logs/unified_%j.out
 #SBATCH --error=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/logs/unified_%j.err
 #SBATCH --partition=l40s
@@ -10,7 +10,7 @@
 #SBATCH --mem=120G
 #SBATCH --cpus-per-task=2
 #
-# One run of train.py.  Edit the block below and `sbatch run_unified.slurm`.
+# One run of train.py (single-section or joint, manual bands or --pe_auto).  Edit the block below and `sbatch train.slurm`.
 
 # ======================= EDIT THIS BLOCK =======================
 DATA=/scratch/jhu/uchitra1/datasets/spatial-RNA/merfish/mouse_liver_merfish
