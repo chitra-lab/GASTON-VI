@@ -11,7 +11,6 @@
 #SBATCH --cpus-per-task=2
 #
 # One run of train.py.  Edit the block below and `sbatch run_unified.slurm`.
-# (run_unified_array.slurm is the TSV-driven version for sweeping many configs.)
 
 # ======================= EDIT THIS BLOCK =======================
 DATA=/scratch/jhu/uchitra1/datasets/spatial-RNA/merfish/mouse_liver_merfish

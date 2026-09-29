@@ -14,7 +14,6 @@ and `z` carries the rest of the biological variation.
 | `gaston_vi/viz/` | isodepth, latent and loss plots |
 | `smoke_test.py` | exercises every package entry point on synthetic arrays in ~10 s |
 | `run_unified.slurm` | one run; edit the block at the top and `sbatch` |
-| `run_unified_array.slurm` | TSV-driven sweeps (13 columns, one run per row) |
 | `old_code/GASTON_VI.py` | the previous single-script implementation, kept as the reference |
 | `old_code/GASTON_VI.slurm` | its runner (note: it invokes an absolute path in the original project tree, not the file beside it) |
 
