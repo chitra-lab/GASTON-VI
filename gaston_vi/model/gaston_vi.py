@@ -33,7 +33,9 @@ class GASTON_VI(nn.Module):
                  beta=0.01,
                  decoder_type="linear_hz",
                  n_batches=0,
-                 n_conditions=0, batch_to_condition=None):
+                 n_conditions=0, batch_to_condition=None,
+                 likelihood="nb",
+                 d_tail_cutoff=0.0):
         super().__init__()
         self.g_dim        = g_dim
         self.n_isodepth   = n_isodepth
@@ -41,6 +43,16 @@ class GASTON_VI(nn.Module):
         self.beta         = beta
         self.n_batches    = n_batches
         self.n_conditions = n_conditions
+        # Ported from gaston_vi_codex_condf.py (not in this package before):
+        # clamps d to [-d_tail_cutoff, d_tail_cutoff] before the decoder sees
+        # it (0 disables). A safety net against the decoder extrapolating for
+        # outlier d; paired with --d_tail_weight's penalty in train.py, which
+        # discourages those outliers from being produced in the first place.
+        self.d_tail_cutoff = d_tail_cutoff
+        # codex_2 (2026-09-29): "gaussian" is the CODEX/proteomics branch --
+        # see the ADAPTATION SEAM note below and likelihood.py.
+        assert likelihood in ("nb", "gaussian"), likelihood
+        self.likelihood = likelihood
 
         self.register_buffer("log_lib_mean",
                              torch.tensor(log_lib_mean, dtype=torch.float32))
@@ -85,7 +97,11 @@ class GASTON_VI(nn.Module):
             n_isodepth, z_dim, g_dim, hidden_dim_decoder,
             n_batches=n_batches,
             n_conditions=n_conditions,
-            batch_to_condition=batch_to_condition)
+            batch_to_condition=batch_to_condition,
+            # ported from gaston_vi_codex_condf.py: CODEX/gaussian data is not
+            # compositional, so no softmax there; NB keeps softmax (rho = each
+            # gene's share of the library, as the generative model assumes).
+            apply_softmax=(likelihood == "nb"))
         print(f"Decoder: {decoder_type}", flush=True)
         if n_batches > 0:
             print(f"scVI encoders batch-conditioned: n_batches={n_batches}", flush=True)
@@ -106,8 +122,13 @@ class GASTON_VI(nn.Module):
         if self.z_dim > 0 and not phase1:
             pyro.module("bio_encoder", self.bio_encoder)
 
-        theta_g = pyro.param("theta_g", x.new_ones(x.shape[1]),
-                             constraint=dist.constraints.positive)
+        if self.likelihood == "nb":
+            theta_g = pyro.param("theta_g", x.new_ones(x.shape[1]),
+                                 constraint=dist.constraints.positive)
+        else:
+            # per-protein Gaussian noise, same role/shape as theta_g above
+            sigma_g = pyro.param("sigma_g", 0.1 * x.new_ones(x.shape[1]),
+                                 constraint=dist.constraints.positive)
 
         with pyro.plate("data", x.shape[0]):
             if self.n_isodepth == 1:
@@ -143,13 +164,25 @@ class GASTON_VI(nn.Module):
                 dist.Normal(l_prior_mu, l_prior_sigma).to_event(1))
             l = torch.exp(log_l)
 
-            rho   = self.decoder(d, z, b)
-            mu    = l * rho
-            theta = theta_g.unsqueeze(0).expand_as(mu)
-            rate  = theta / (mu + 1e-8)
-            pyro.sample("obs",
-                dist.GammaPoisson(concentration=theta, rate=rate).to_event(1),
-                obs=x)
+            d_dec = (d.clamp(-self.d_tail_cutoff, self.d_tail_cutoff)
+                    if self.d_tail_cutoff > 0 else d)
+            rho = self.decoder(d_dec, z, b)
+            if self.likelihood == "nb":
+                mu    = l * rho
+                theta = theta_g.unsqueeze(0).expand_as(mu)
+                rate  = theta / (mu + 1e-8)
+                pyro.sample("obs",
+                    dist.GammaPoisson(concentration=theta, rate=rate).to_event(1),
+                    obs=x)
+            else:
+                # CODEX intensities have no depth/library-size concept (see
+                # dataset_info.txt: already arcsinh + per-protein min-max
+                # scaled to [0,1]), so the mean is the decoder output alone --
+                # `l`/log_l is still sampled (keeps the guide/checkpoint
+                # layout identical) but does not enter the observation.
+                mu    = rho
+                sigma = sigma_g.unsqueeze(0).expand_as(mu)
+                pyro.sample("obs", dist.Normal(mu, sigma).to_event(1), obs=x)
 
     def guide(self, x, s, b=None, beta=None, phase1=False):
         if beta is None:

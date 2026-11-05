@@ -43,8 +43,12 @@ def _pe_auto_one(PH, S_sec, rows, counts_file, a):
         h *= 1.5
     D = PH.robust_diameter(z)
     density = len(rows) / (_m.pi * (D / 2.0) ** 2)
+    # codex_2: CODEX intensities are already arcsinh+min-max scaled to [0,1];
+    # skip the CP10K/log1p normalisation (meaningless for non-count data) and
+    # z-score the raw values directly -- see lognorm_pcs's docstring.
     scores, _evr, _t = PH.lognorm_pcs(counts_file, rows, a.pe_auto_n_pcs,
-                                      100_000, 20_000, 0)
+                                      100_000, 20_000, 0,
+                                      skip_norm=(getattr(a, "likelihood", "nb") == "gaussian"))
     lags, curves, stats = None, [], []
     for k in range(a.pe_auto_n_pcs):
         lg, Ck = PH.radial_correlogram(z, scores[:, k], h)

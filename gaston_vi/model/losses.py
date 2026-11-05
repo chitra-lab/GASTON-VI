@@ -189,3 +189,37 @@ def compute_batch_d_mmd(model, spatial_batch, batch_idx, min_per_batch=2,
             total = total + _two_sample_mmd(groups[i], groups[j])
             n_pairs += 1
     return total / max(1, n_pairs)
+
+
+# ------------------------------------------------------------
+# Per-epoch isodepth projection (--project_d)
+# ------------------------------------------------------------
+# Ported from gaston_vi_codex_condf.py (the original bespoke CODEX script,
+# codex/condition_batch/) -- NOT present in this package before this port.
+# An explicit per-epoch re-standardization layered on top of whatever
+# compute_batch_d_mmd's gradient-based alignment already did that epoch;
+# unlike compute_batch_d_mmd (a soft loss term, gradients blend with
+# everything else on the spatial-encoder optimiser step), this directly
+# rewrites the final linear layer's weight/bias so d_mu has mean=0, std=1 over
+# each batch's full training set, exactly, every epoch -- no @torch.no_grad()
+# step is partial.
+@torch.no_grad()
+def project_spatial_encoders_epoch(model, S_train_by_batch, eps=1e-6):
+    """Rescale each batch's SpatialEncoder final linear layer so d_mu has
+    mean=0, std=1 over the full training set for that batch:
+        d = W*h + b  =>  d_new = (W/sigma)*h + (b - mu)/sigma
+    Requires a BatchedSpatialEncoder (model.spatial_encoder.encoders); no-op
+    (same as the original) for the single-section / n_isodepth>1 cases.
+    """
+    if not (hasattr(model, 'spatial_encoder') and
+            hasattr(model.spatial_encoder, 'encoders')):
+        return
+    for b, s_b in enumerate(S_train_by_batch):
+        if s_b.shape[0] < 2:
+            continue
+        enc = model.spatial_encoder.encoders[b]
+        r   = enc(s_b)[0].squeeze(-1)
+        mu  = r.mean()
+        std = r.std(unbiased=False).clamp_min(eps)
+        enc.mu.weight.div_(std)
+        enc.mu.bias.sub_(mu).div_(std)

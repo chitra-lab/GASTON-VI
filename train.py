@@ -74,6 +74,7 @@ import os, sys, random, time
 import json
 import numpy as np
 import torch
+import torch.nn.functional as F
 import pyro
 from pyro.infer import SVI, Trace_ELBO
 from pyro.optim import Adam
@@ -185,6 +186,11 @@ parser.add_argument("--decoder_type", type=str, default="linear_hz",
     help="only linear_hz remains; the combined and additive decoders were "
          "removed 2026-09-28 (unused in 323/323 runs)")
 parser.add_argument("--gene_names_file", type=str, default=None)
+parser.add_argument("--likelihood", type=str, default="nb", choices=["nb", "gaussian"],
+    help="'gaussian' is the CODEX/proteomics branch for data that is already "
+         "arcsinh + per-protein min-max scaled to [0,1] (not raw counts); see "
+         "gaston_vi/model/gaston_vi.py's ADAPTATION SEAM note and "
+         "gaston_vi/preprocess/codex.py for the preprocessing it expects.")
 
 # -- disentanglement --
 parser.add_argument("--di_method", type=str, default="none",
@@ -201,6 +207,25 @@ parser.add_argument("--batch_align_weight", type=float, default=0.0,
          "given, the penalty is restricted to batch pairs within the same "
          "condition (never across conditions). Gradients from this term "
          "flow to the spatial encoders only.")
+parser.add_argument("--d_tail_weight", type=float, default=0.0,
+    help="Weight on a squared-hinge penalty, d_tail_weight * relu(|d| - "
+         "d_tail_cutoff)^2 (mean over the minibatch), discouraging the "
+         "learned isodepth from developing long outlier tails. 0 disables it. "
+         "Added to the same spatial-encoder-only optimiser step as "
+         "--batch_align_weight; also active (optimiser created) when "
+         "batch_align_weight==0 but this is nonzero, as long as >=2 batches.")
+parser.add_argument("--d_tail_cutoff", type=float, default=0.0,
+    help="Cutoff kappa for --d_tail_weight's penalty, AND (independently) "
+         "the value d is clamped to (clamp(-kappa, kappa)) before being fed "
+         "to the decoder in the generative model -- a safety net against the "
+         "decoder extrapolating for outlier d. 0 disables both the penalty "
+         "term (regardless of --d_tail_weight) and the clamp.")
+parser.add_argument("--project_d", action="store_true", default=False,
+    help="Once per epoch (after the minibatch loop), rescale each batch's "
+         "SpatialEncoder final linear layer so its d_mu has mean=0, std=1 "
+         "over that batch's full training set -- an explicit per-epoch "
+         "re-standardization on top of whatever the encoder itself learned. "
+         "Requires a batch_file.")
 
 # -- optimisation stability --
 parser.add_argument("--grad_clip_norm", type=float, default=10.0,
@@ -455,7 +480,7 @@ else:
 # ============================================================
 # The NB log-density itself lives in the package (it is the adaptation seam);
 # the loops that apply it are harness and stay here, next to extract_latents.
-from gaston_vi.model import nb_log_prob                               # noqa: E402
+from gaston_vi.model import nb_log_prob, gaussian_log_prob            # noqa: E402
 
 
 def iterate_minibatches(X, S, batch_size, B=None, shuffle=True):
@@ -490,6 +515,27 @@ def nb_loss(model, X, S, batch_size, B=None, eps=1e-8):
         total  += (-logp).sum().item()
         denom  += x.numel()
     return total / max(1, denom)
+
+
+def gaussian_loss(model, X, S, batch_size, B=None, eps=1e-8):
+    """Gaussian twin of nb_loss (average per-element NLL), for
+    likelihood="gaussian". Mirrors GASTON_VI.model()'s obs site: mu = rho
+    (no library-size scaling -- see the note there)."""
+    sigma_g = pyro.get_param_store()["sigma_g"].detach().to(X.device)
+    total, denom = 0.0, 0
+    for x, s, b in iterate_minibatches(X, S, batch_size, B=B, shuffle=False):
+        d_mu  = model.encode_d_mu(s, b)
+        z_mu  = (x.new_zeros(x.shape[0], 0) if model.z_dim == 0
+                 else model.bio_encoder(torch.log1p(x), b)[0])
+        mu    = model.decoder(d_mu, z_mu, b)
+        sigma = sigma_g.unsqueeze(0).expand_as(mu)
+        logp  = gaussian_log_prob(x, mu, sigma, eps=eps)
+        total += (-logp).sum().item()
+        denom += x.numel()
+    return total / max(1, denom)
+
+
+recon_loss_fn = nb_loss if args.likelihood == "nb" else gaussian_loss
 
 
 @torch.no_grad()
@@ -575,7 +621,8 @@ def print_per_batch_isodepth_scale(model, S, B, batch_size, tag=""):
 # part of the seeded trajectory.
 from gaston_vi.model.losses import (compute_disentanglement_reg,       # noqa: E402
                                     compute_batch_d_mmd,
-                                    _spatial_encoder_params)
+                                    _spatial_encoder_params,
+                                    project_spatial_encoders_epoch)
 
 # ============================================================
 # 4.  POSITIONAL ENCODING  (gaston_vi.pe)
@@ -834,6 +881,8 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
         n_batches=n_batches,
         n_conditions=n_conditions,
         batch_to_condition=batch_to_condition,
+        likelihood=args.likelihood,
+        d_tail_cutoff=args.d_tail_cutoff,
     ).to(device)
 
     svi_phase1 = SVI(
@@ -851,17 +900,31 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
     if di_method != "none" and z_bio_dim > 0 and di_weight != 0.0:
         di_optimizer = torch.optim.Adam(vae.parameters(), lr=1e-3)
 
-    # Cross-batch isodepth alignment: optimiser restricted to spatial encoders
+    # Cross-batch isodepth alignment: optimiser restricted to spatial encoders.
+    # Also created for --d_tail_weight alone, since the tail penalty needs the
+    # same spatial-encoder-only step even when batch_align_weight==0.
     batch_mmd_optimizer = None
     spatial_params = None
-    if batch_align_weight != 0.0 and n_batches >= 2:
+    if (batch_align_weight != 0.0 or args.d_tail_weight != 0.0) and n_batches >= 2:
         spatial_params = _spatial_encoder_params(vae)
         batch_mmd_optimizer = torch.optim.Adam(spatial_params, lr=1e-3)
         scope = ("within-condition batch pairs"
                  if batch_to_condition is not None else "all batch pairs")
-        print(f"Cross-batch isodepth MMD alignment ON "
-              f"(weight={batch_align_weight}, spatial encoders only, {scope})",
+        print(f"Cross-batch isodepth MMD alignment "
+              f"{'ON' if batch_align_weight != 0.0 else 'off'} "
+              f"(weight={batch_align_weight}, spatial encoders only, {scope}); "
+              f"d_tail penalty {'ON' if args.d_tail_weight != 0.0 else 'off'} "
+              f"(weight={args.d_tail_weight}, cutoff={args.d_tail_cutoff})",
               flush=True)
+
+    # Precompute per-batch training spatial tensors for --project_d
+    S_train_by_batch = None
+    if args.project_d and B_full is not None:
+        _tb_flat = train_batch.view(-1)
+        S_train_by_batch = [train_spatial_norm[(_tb_flat == b)]
+                            for b in range(n_batches)]
+        print(f"[project_d] ON, S_train_by_batch sizes: "
+              f"{[s.shape[0] for s in S_train_by_batch]}", flush=True)
 
     recon_train_history = []
     recon_val_history   = []
@@ -905,11 +968,24 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
             # only. Runs in BOTH phases since the isodepth scale is set during
             # the phase-1 spatial warmup.
             if batch_mmd_optimizer is not None:
-                mmd = compute_batch_d_mmd(
-                    vae, spatial, batch,
-                    batch_to_condition=batch_to_condition)
+                align_loss = spatial.new_tensor(0.0)
+
+                if batch_align_weight != 0.0:
+                    mmd = compute_batch_d_mmd(
+                        vae, spatial, batch,
+                        batch_to_condition=batch_to_condition)
+                    align_loss = align_loss + batch_align_weight * mmd
+                    epoch_batch_mmd += mmd.item() * gene.shape[0]
+
+                # Tail penalty: d_tail_weight * relu(|d| - d_tail_cutoff)^2,
+                # mean over batch.
+                if args.d_tail_weight > 0.0 and args.d_tail_cutoff > 0.0:
+                    d_mu_batch = vae.encode_d_mu(spatial, batch)
+                    tail = F.relu(d_mu_batch.abs() - args.d_tail_cutoff)
+                    align_loss = align_loss + args.d_tail_weight * (tail ** 2).mean()
+
                 batch_mmd_optimizer.zero_grad()
-                (batch_align_weight * mmd).backward()
+                align_loss.backward()
                 mmd_grad_norm = torch.norm(torch.stack([
                     p.grad.detach().norm() for p in spatial_params
                     if p.grad is not None]))
@@ -920,7 +996,6 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
                     torch.nn.utils.clip_grad_norm_(
                         spatial_params, GRAD_CLIP_NORM)
                 batch_mmd_optimizer.step()
-                epoch_batch_mmd += mmd.item() * gene.shape[0]
 
             num += gene.shape[0]
 
@@ -928,13 +1003,17 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
         di_reg_history.append(epoch_di_reg / max(1, num))
         batch_mmd_history.append(epoch_batch_mmd / max(1, num))
 
+        # Per-epoch projection (--project_d): standardize each batch's isodepth
+        if args.project_d and S_train_by_batch is not None:
+            project_spatial_encoders_epoch(vae, S_train_by_batch)
+
         vae.eval()
         with torch.no_grad():
-            recon_train = nb_loss(vae, train_gene, train_spatial_norm,
+            recon_train = recon_loss_fn(vae, train_gene, train_spatial_norm,
                                   BATCH_SIZE, B=train_batch)
             recon_train_history.append(recon_train)
             if val_idx is not None:
-                recon_val = nb_loss(vae, val_gene, val_spatial_norm,
+                recon_val = recon_loss_fn(vae, val_gene, val_spatial_norm,
                                     BATCH_SIZE, B=val_batch)
                 recon_val_history.append(recon_val)
 
@@ -989,6 +1068,7 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
             "n_conditions": n_conditions,
             "batch_to_condition": (batch_to_condition.copy()
                                    if batch_to_condition is not None else None),
+            "likelihood": args.likelihood,
         },
         "sigma": sigma, "num_freqs": num_freqs,
         "extra_wavelengths": list(extra_wavelengths),
@@ -1001,6 +1081,8 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
         "pe_lambda_max": pe_encoder.lambda_max,
         "di_method": di_method, "di_weight": di_weight,
         "batch_align_weight": batch_align_weight,
+        "d_tail_weight": args.d_tail_weight, "d_tail_cutoff": args.d_tail_cutoff,
+        "project_d": args.project_d,
         "warmup_epochs": WARMUP_EPOCHS,
         "train_spatial_mean": train_spatial_mean.cpu().numpy(),
         "train_spatial_std":  train_spatial_std.cpu().numpy(),
@@ -1158,6 +1240,9 @@ row = {
     "di_method":              di_method,
     "di_weight":              di_weight,
     "batch_align_weight":     batch_align_weight,
+    "d_tail_weight":          args.d_tail_weight,
+    "d_tail_cutoff":          args.d_tail_cutoff,
+    "project_d":              args.project_d,
     "warmup_epochs":          WARMUP_EPOCHS,
     "sigma":                  sigma,
     "num_freqs":              num_freqs,

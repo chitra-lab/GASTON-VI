@@ -1,10 +1,27 @@
-"""Decoder: rho = softmax( f([d, condition]) + W.[z, batch] ).
+"""Decoder: rho = softmax( f([d, condition]) + W.[z, batch] ) for NB; for
+Gaussian, rho = f([d, condition]) + W.[z, batch] directly, no softmax.
 
 `linear_hz` is the only decoder retained (323/323 runs used it); the additive
 and combined variants were deleted 2026-09-28. Keeping h LINEAR in z is what
 makes f(d) a separable, interpretable zonation curve -- a nonlinear h can
 absorb spatial signal, which is exactly what the `additive`/`combined`
 variants did.
+
+**apply_softmax (2026-10-06, ported from gaston_vi_codex_condf.py, the
+original bespoke CODEX script):** CODEX protein intensities are NOT
+compositional data the way counts are -- there is no real "fixed total
+protein budget" one channel's rise has to be balanced by another's fall the
+way sequencing depth forces a real constraint on count data. Forcing softmax
+onto 49 independently-scaled [0,1] intensities confirmed to produce a real
+artifact (2026-10 session): one dominant marker drags every other marker's
+f(d) curve down with it via the sum-to-1 constraint, regardless of that
+marker's own biology -- visible as several unrelated crypt/villus markers
+collapsing onto nearly the same curve shape. gaston_vi_codex_condf.py's own
+decoder docstring already said "CODEX: returns raw values -- no softmax" --
+this was a known-correct design choice in the original script that the
+modularized package's "minimal adjustments" port never carried over.
+`apply_softmax` defaults to True (unchanged NB behaviour); GASTON_VI sets it
+to `likelihood == "nb"`.
 """
 import numpy as np
 import torch
@@ -23,11 +40,12 @@ class LinearBiologicalDecoder(nn.Module):
     inspects W[:, :z_dim] (the z columns).
     """
     def __init__(self, d_dim, z_dim, g_dim, hidden_dim=128, n_batches=0,
-                 n_conditions=0, batch_to_condition=None):
+                 n_conditions=0, batch_to_condition=None, apply_softmax=True):
         super().__init__()
         self.z_dim = z_dim
         self.n_batches = n_batches
         self.n_conditions = n_conditions
+        self.apply_softmax = apply_softmax
         if batch_to_condition is not None:
             self.register_buffer(
                 "batch_to_condition",
@@ -85,7 +103,7 @@ class LinearBiologicalDecoder(nn.Module):
         if self.h_linear is not None and z.shape[-1] > 0:
             z_in = self._z_input(z, batch)
             logits = logits + self.h_linear(z_in)
-        return torch.softmax(logits, dim=-1)
+        return torch.softmax(logits, dim=-1) if self.apply_softmax else logits
 
     def f_logits(self, d, batch=None, condition=None):
         return self.f_out(self.f_net(self._f_input(d, batch, condition)))
@@ -95,7 +113,10 @@ class LinearBiologicalDecoder(nn.Module):
         return self.h_linear(z_in)
 
     def f_proportions(self, d, batch=None, condition=None):
-        return torch.softmax(self.f_logits(d, batch, condition), dim=-1)
+        """Despite the name (kept for call-site compatibility), this returns
+        raw f(d) values, not proportions, when apply_softmax=False."""
+        logits = self.f_logits(d, batch, condition)
+        return torch.softmax(logits, dim=-1) if self.apply_softmax else logits
 
 
 def linear_z_importance(decoder, gene_names=None, save_path=None):

@@ -18,6 +18,8 @@ GammaPoisson(concentration=theta, rate=theta/mu) is NB with mean mu and
 dispersion theta, which is why the generative side and nb_log_prob look
 different while describing the same thing.
 """
+import math
+
 import torch
 
 
@@ -30,3 +32,18 @@ def nb_log_prob(y, mu, theta, eps=1e-8):
         + theta * (torch.log(theta) - torch.log(theta + mu))
         + y     * (torch.log(mu)    - torch.log(theta + mu))
     )
+
+
+# --- codex_2 (2026-09-29): Gaussian counterpart for CODEX/proteomics data ---
+# `y` here is arcsinh+min-max-scaled protein intensity in [0,1], not a raw
+# count, so the NB/GammaPoisson site above does not apply (see gaston_vi.py's
+# ADAPTATION SEAM docstring). This is the evaluation-side twin of the
+# `dist.Normal(mu, sigma_g)` obs site added to GASTON_VI.model() for
+# likelihood="gaussian"; keep the two in sync the same way nb_log_prob and
+# the GammaPoisson site must stay in sync.
+_LOG_2PI = math.log(2.0 * math.pi)
+
+
+def gaussian_log_prob(y, mu, sigma, eps=1e-8):
+    sigma = torch.clamp(sigma, min=eps)
+    return -0.5 * (_LOG_2PI + 2.0 * torch.log(sigma) + ((y - mu) / sigma) ** 2)

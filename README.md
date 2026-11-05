@@ -11,6 +11,7 @@ and `z` carries the rest of the biological variation.
 | `train.py` | the entry point — single-section **and** joint (multi-batch) models |
 | `gaston_vi/model/` | likelihood, encoders, decoders, the `GASTON_VI` module, the disentanglement + cross-batch-MMD losses |
 | `gaston_vi/pe/` | positional-encoding modules, the band heuristic, the `--pe_auto` resolver and its cache |
+| `gaston_vi/preprocess/` | modality-specific preprocessing (currently: CODEX/spatial-proteomics) |
 | `gaston_vi/viz/` | isodepth, latent and loss plots |
 | `smoke_test.py` | exercises every package entry point on synthetic arrays in ~10 s |
 | `train.slurm` | slurm wrapper for one `train.py` run; edit the parameter block at the top and `sbatch` |
@@ -67,16 +68,43 @@ input files and every knob, so a regenerated counts file invalidates the entry.
 `train.py` replaces the eight or nine near-duplicate training scripts that
 preceded it; `old_code/GASTON_VI.py` is the last single-file generation.
 
-## Note on the NB / count-data assumption
+## CODEX / spatial-proteomics modality (`--likelihood gaussian`)
 
-Adapting the model to non-count data (e.g. spatial proteomics) means changing
-four places, which are cross-referenced in the code:
+Protein intensities are not sequencing counts, so adapting the model meant
+changing four places (paper Appendix S2.6); all four are done, cross-referenced
+in the code via an "ADAPTATION SEAM" comment at each site:
 
-1. `nb_log_prob` in `gaston_vi/model/likelihood.py` — the evaluation side.
-2. the `dist.GammaPoisson` sample site inside `GASTON_VI.model()` and its
-   `theta_g` parameter — the generative side. (1) and (2) describe the same
-   distribution from two directions; change one without the other and the model
-   and its reported NLL silently disagree.
-3. `lognorm_pcs` in `gaston_vi/pe/auto.py` — hardcoded log1p-CP10K.
-4. the library-size prior in `train.py` — an empirical normal on log total
-   counts per cell, fitted per batch. Intensity data has no library size.
+1. `gaussian_log_prob` in `gaston_vi/model/likelihood.py` — the evaluation-side
+   twin of `nb_log_prob`.
+2. `GASTON_VI.model()`'s `dist.Normal(mu, sigma_g)` obs site (vs. the NB
+   branch's `dist.GammaPoisson`), selected by `likelihood="gaussian"`; `mu` is
+   the decoder output directly (`LinearBiologicalDecoder(apply_softmax=False)`
+   — CODEX intensities are not compositional the way counts are, so forcing a
+   sum-to-1 softmax over the markers distorts every channel's curve). (1) and
+   (2) describe the same distribution from two directions; change one without
+   the other and the model and its reported NLL silently disagree.
+3. `lognorm_pcs(..., skip_norm=True)` in `gaston_vi/pe/auto.py` /
+   `gaston_vi/pe/heuristic.py` — CP10K/log1p normalisation is meaningless for
+   already-scaled intensities, so `--pe_auto` z-scores the raw values instead.
+   `skip_norm` is set automatically from `--likelihood`.
+4. the library-size prior in `train.py` is still fit the same way for both
+   likelihoods (keeps the guide/checkpoint layout identical across runs), but
+   on the gaussian branch it is sampled and then unused — the observation's
+   mean is the decoder output alone, with no library-size scaling.
+
+Two more CODEX-specific pieces, both off by default (`0` / unset):
+
+- `--d_tail_weight`/`--d_tail_cutoff` — a squared-hinge penalty,
+  `d_tail_weight * relu(|d| - d_tail_cutoff)^2`, discouraging outlier isodepth
+  tails during multi-batch training; `d_tail_cutoff` also clamps `d` before
+  the decoder sees it, independent of the penalty.
+- `--project_d` — once per epoch, rescales each batch's spatial-encoder output
+  so `d_mu` has mean 0 / std 1 over that batch's training set exactly (on top
+  of whatever `--batch_align_weight`'s soft MMD alignment already did that
+  epoch). Requires `--batch_file`.
+
+`gaston_vi/preprocess/codex.py` implements the input-side preprocessing this
+branch expects: arcsinh-transform (cofactor 1), per-protein 1st/99th-percentile
+clip, per-protein min-max scaling to `[0, 1]` — run once per anatomical
+region/condition (percentiles and the scaling range are region-specific, not
+global).

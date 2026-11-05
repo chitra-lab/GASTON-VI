@@ -88,9 +88,16 @@ def nn_spacing(S, n_sub=100_000, seed=0):
     return float(np.median(d[:, 1]))
 
 
-def lognorm_pcs(X_path, rows, n_pcs, n_fit, chunk, seed):
+def lognorm_pcs(X_path, rows, n_pcs, n_fit, chunk, seed, skip_norm=False):
     """Library-size normalise + log1p + gene z-score, PCA (fit on <= n_fit random
     rows, project all `rows`). Streams the counts matrix in row chunks.
+
+    skip_norm: codex_2 (proteomics adaptation seam) -- CODEX intensities are
+    already arcsinh + per-protein min-max scaled to [0,1]; row sums are not a
+    library-size/depth signal, so CP10K scaling + log1p is meaningless and
+    would distort the data. When True, skip both and z-score the raw values
+    directly before PCA. The z-score + PCA steps below are modality-agnostic
+    and unchanged either way.
 
     Returns scores (len(rows), n_pcs), explained-variance ratio, gene stats."""
     from sklearn.decomposition import PCA
@@ -104,8 +111,9 @@ def lognorm_pcs(X_path, rows, n_pcs, n_fit, chunk, seed):
         r = np.sort(r)
         return np.asarray(X[r], dtype=np.float32)
 
-    # pass 1 (sequential): library sizes for all rows + the raw rows of a random
-    # fit subset, collected on the fly so the file is never randomly accessed
+    # pass 1 (sequential): library sizes for all rows (skipped if skip_norm) +
+    # the raw rows of a random fit subset, collected on the fly so the file is
+    # never randomly accessed
     fit_mask = np.zeros(n, dtype=bool)
     fit_mask[rng.choice(n, min(n_fit, n), replace=False)] = True
     lib = np.zeros(n, dtype=np.float64)
@@ -113,21 +121,30 @@ def lognorm_pcs(X_path, rows, n_pcs, n_fit, chunk, seed):
     f = 0
     for s in range(0, n, chunk):
         blk = _load(rows[s:s + chunk])
-        lib[s:s + chunk] = blk.sum(axis=1)
+        if not skip_norm:
+            lib[s:s + chunk] = blk.sum(axis=1)
         m = fit_mask[s:s + chunk]
         F[f:f + int(m.sum())] = blk[m]
         f += int(m.sum())
         del blk
-    target = float(np.median(lib[lib > 0]))
 
-    def _norm(block, lib_block):
-        sf = np.where(lib_block > 0, target / np.maximum(lib_block, 1e-12), 0.0)
-        return np.log1p(block * sf[:, None].astype(np.float32))
+    if skip_norm:
+        target = None
 
-    # in-place normalisation / standardisation of the fit matrix
-    sf = np.where(lib[fit_mask] > 0, target / np.maximum(lib[fit_mask], 1e-12), 0.0).astype(np.float32)
-    F *= sf[:, None]
-    np.log1p(F, out=F)
+        def _norm(block, lib_block):
+            return block
+    else:
+        target = float(np.median(lib[lib > 0]))
+
+        def _norm(block, lib_block):
+            sf = np.where(lib_block > 0, target / np.maximum(lib_block, 1e-12), 0.0)
+            return np.log1p(block * sf[:, None].astype(np.float32))
+
+        # in-place normalisation / standardisation of the fit matrix
+        sf = np.where(lib[fit_mask] > 0, target / np.maximum(lib[fit_mask], 1e-12), 0.0).astype(np.float32)
+        F *= sf[:, None]
+        np.log1p(F, out=F)
+
     mu = F.mean(axis=0)
     sd = F.std(axis=0)
     sd[sd < 1e-8] = 1.0

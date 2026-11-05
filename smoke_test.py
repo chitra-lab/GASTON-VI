@@ -272,6 +272,92 @@ with tempfile.TemporaryDirectory() as td:
     run("plot_loss_curve", plot_loss_curve, list(np.linspace(5, 1, 50)),
         list(np.linspace(5.2, 1.3, 50)), f"{td}/loss.png")
 
+# ---------------------------------------------------------- analysis
+print("=== gaston_vi.analysis ===")
+from gaston_vi.analysis import differential_gradient_score             # noqa: E402
+
+
+def dg_score_bounds_and_shape():
+    """DG_m in [0, 1]; a feature identical across conditions scores ~0,
+    one whose shape flips sign across conditions scores near 1."""
+    n_c, n_d, n_m = 4, 50, 3
+    d_grid = np.linspace(-2.5, 2.5, n_d)
+    h = np.zeros((n_c, n_d, n_m))
+    h[:, :, 0] = np.sin(d_grid)                         # same shape every c
+    for c in range(n_c):
+        h[c, :, 1] = (-1) ** c * np.sin(d_grid)          # shape flips sign by c
+        h[c, :, 2] = rng.normal(size=n_d)                 # unrelated per c
+    dg = differential_gradient_score(h)
+    assert dg.shape == (n_m,)
+    assert np.all((dg >= 0) & (dg <= 1 + 1e-8)), dg
+    assert dg[0] < 1e-6, f"shared-shape feature should score ~0, got {dg[0]}"
+    assert dg[1] > dg[0], "sign-flipping feature should score higher than shared"
+
+
+def dg_score_window():
+    n_c, n_d, n_m = 4, 50, 2
+    d_grid = np.linspace(-2.5, 2.5, n_d)
+    h = rng.normal(size=(n_c, n_d, n_m))
+    full = differential_gradient_score(h)
+    windowed = differential_gradient_score(h, d_grid=d_grid, d_range=(-1.75, 1.75))
+    assert full.shape == windowed.shape == (n_m,)
+    try:
+        differential_gradient_score(h, d_range=(-1.75, 1.75))
+        raise AssertionError("d_range without d_grid should raise")
+    except ValueError:
+        pass
+
+
+run("differential_gradient_score bounds + shape sensitivity", dg_score_bounds_and_shape)
+run("differential_gradient_score d_range window", dg_score_window)
+
+# ------------------------------------------------------- preprocess
+print("=== gaston_vi.preprocess ===")
+from gaston_vi.preprocess import preprocess_codex, apply_codex_scaling  # noqa: E402
+
+
+def preprocess_codex_bounds():
+    """Output is [0, 1]; the clipped protein's bounds match the fit range."""
+    n_cells, n_proteins = 500, 6
+    raw = rng.exponential(scale=50.0, size=(n_cells, n_proteins)).astype(np.float32)
+    raw[10, 0] = 1e6  # extreme outlier -- should get clipped, not blow up [0,1]
+    scaled, stats = preprocess_codex(raw, clip_percentile=1.0)
+    assert scaled.shape == raw.shape
+    assert np.nanmin(scaled) >= 0.0 and np.nanmax(scaled) <= 1.0 + 1e-6, \
+        (scaled.min(), scaled.max())
+    assert scaled[10, 0] == scaled[:, 0].max(), "clipped outlier should sit at the cap"
+    assert set(stats) == {"lo", "hi"}
+    assert stats["lo"].shape == stats["hi"].shape == (n_proteins,)
+
+
+def preprocess_codex_no_clip():
+    n_cells, n_proteins = 200, 4
+    raw = rng.exponential(scale=10.0, size=(n_cells, n_proteins)).astype(np.float32)
+    scaled, _ = preprocess_codex(raw, clip_percentile=0.0)
+    assert np.isclose(scaled.min(), 0.0, atol=1e-5)
+    assert np.isclose(scaled.max(), 1.0, atol=1e-5)
+
+
+def preprocess_codex_apply_scaling_matches_fit():
+    """apply_codex_scaling on the SAME data used to fit should reproduce it."""
+    n_cells, n_proteins = 300, 5
+    raw = rng.exponential(scale=20.0, size=(n_cells, n_proteins)).astype(np.float32)
+    scaled, stats = preprocess_codex(raw, clip_percentile=1.0)
+    reapplied = apply_codex_scaling(raw, stats)
+    assert np.allclose(scaled, reapplied, atol=1e-6)
+
+
+def preprocess_codex_nan_handling():
+    raw = np.array([[1.0, np.nan], [2.0, 3.0], [np.nan, 5.0]], dtype=np.float32)
+    scaled, _ = preprocess_codex(raw, clip_percentile=0.0)
+    assert np.isfinite(scaled).all()
+
+
+run("preprocess_codex bounds + outlier clipping", preprocess_codex_bounds)
+run("preprocess_codex no-clip true min/max", preprocess_codex_no_clip)
+run("apply_codex_scaling matches fit on same data", preprocess_codex_apply_scaling_matches_fit)
+run("preprocess_codex NaN handling", preprocess_codex_nan_handling)
+
 print()
 print("SMOKE FAIL: " + ", ".join(fails) if fails
       else f"SMOKE: ALL PASS ({len(skips)} skipped)" if skips
