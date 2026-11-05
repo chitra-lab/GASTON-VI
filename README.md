@@ -13,6 +13,8 @@ GASTON-VI jointly learns:
 * a cell state vector for each cell, which captures additional cell-intrinsic
   variation such as cell types
 
+![](gaston_vi_overview.png)
+
 ## Installation
 
 ```bash
