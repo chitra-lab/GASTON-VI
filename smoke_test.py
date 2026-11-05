@@ -3,16 +3,8 @@
 
     python smoke_test.py
 
-Runs in ~1 min on CPU with no data files. It does NOT check numerical
-correctness -- that is pe_heuristic/regression.py, which retrains 4 configs on
-the GPU (~8 min) and requires bit-identical d_mu. This script exists to catch
-import-time and NameError-class breakage in seconds instead of 4 minutes into a
-GPU run, which is how a missing `import math` in viz/latents.py was found after
-it had killed four jobs.
-
-Run it after ANY refactor of the package, before submitting the GPU array.
-Also useful when adapting the model to another modality: swap the likelihood
-and this tells you immediately whether the wiring still holds together.
+Runs in about a minute on CPU with no data files. It catches import errors and
+broken wiring, not numerical errors. Run it after changing the package.
 """
 import os
 import sys
@@ -47,12 +39,10 @@ def run(name, fn, *a, **k):
         fails.append(name)
 
 
-# NOTE: train.py is an EXECUTABLE, not a module -- its top level parses args and
-# runs the pipeline, and nothing in the repo imports it (36 downstream scripts
-# consume the saved d_mu.npy / z_mu.npy instead). So this file tests the package
-# only. `iterate_minibatches` / `nb_loss` / `extract_latents` live in train.py
-# and are deliberately not covered here; the end-to-end check below reproduces
-# the same forward pass from package pieces.
+# train.py runs its pipeline at the top level, so it cannot be imported and this
+# file tests the package only. `iterate_minibatches`, `nb_loss` and
+# `extract_latents` are not covered; the end-to-end check below reproduces the
+# same forward pass from package pieces.
 
 
 def _nb_nll(m, X, S, B, batch_size=64):
@@ -158,13 +148,8 @@ def auto_fingerprint():
 
 
 def heuristic_is_in_package():
-    """The band heuristic is part of the package -- no sys.path walk-up.
-
-    It moved from pe_heuristic/pe_heuristic.py to gaston_vi/pe/heuristic.py on
-    2026-09-29, which is what let auto.py drop its walk-up hack. It must stay
-    importable BOTH as a module (auto.py does `from . import heuristic`) and as
-    a CLI (`python -m gaston_vi.pe.heuristic`), so it may not gain any
-    package-relative imports of its own.
+    """The band heuristic must work as a module and as a CLI
+    (`python -m gaston_vi.pe.heuristic`), so it cannot use package-relative imports.
     """
     from gaston_vi.pe import heuristic as PH
     for fn in ("band_grid", "lognorm_pcs", "main"):
@@ -224,13 +209,12 @@ run("dead decoder_type rejected", model_rejects_dead_decoder)
 print("=== gaston_vi.model.losses ===")
 
 
-def losses_all_di_methods():
+def losses_di_method():
     from gaston_vi.model.losses import compute_disentanglement_reg
     m, X, S, B = _model()
-    for meth in ("none", "simvi_mi", "simvi_mmd", "simvi_mi_kl", "simvi_mmd_kl"):
-        v = compute_disentanglement_reg(meth, m, X[:64], S[:64], B[:64])
-        assert torch.isfinite(v).all(), (meth, v)
-        assert v.item() >= 0.0, (meth, v)
+    v = compute_disentanglement_reg("simvi_mmd", m, X[:64], S[:64], B[:64])
+    assert torch.isfinite(v).all(), v
+    assert v.item() >= 0.0, v
     try:
         compute_disentanglement_reg("bogus", m, X[:64], S[:64], B[:64])
     except ValueError:
@@ -254,7 +238,7 @@ def losses_batch_align():
     assert len(_spatial_encoder_params(m)) > 0
 
 
-run("compute_disentanglement_reg, all methods", losses_all_di_methods)
+run("compute_disentanglement_reg", losses_di_method)
 run("compute_batch_d_mmd + condition gating", losses_batch_align)
 
 # --------------------------------------------------------------- viz

@@ -1,12 +1,4 @@
-"""--pe_auto: derive the PE band set from the data via pe_heuristic.
-
-Moved verbatim from train.py (then seq_train_unified.py) (2026-09-29 modularisation, step 2).
-
-NOTE for other modalities: _pe_auto_one calls pe_heuristic.lognorm_pcs, which
-normalises counts as log1p-CP10K.  That is wrong for intensity data (proteomics)
-and is the seam to change -- pe/bands.py is modality-agnostic and should not need
-edits.
-"""
+"""--pe_auto: derive the PE band set from the data via the band heuristic."""
 import os
 
 import numpy as np
@@ -15,8 +7,7 @@ import numpy as np
 def _pe_auto_fingerprint(a):
     """Everything the derived bands depend on. The cache is keyed on this, so a
     regenerated counts file or a changed knob invalidates it instead of silently
-    returning stale bands (the e135 counts file changed size mid-session, which a
-    path-only cache would have missed)."""
+    returning stale bands."""
     def st(pth):
         if not pth or not os.path.exists(pth):
             return None
@@ -31,7 +22,7 @@ def _pe_auto_fingerprint(a):
 
 
 def _pe_auto_one(PH, S_sec, rows, counts_file, a):
-    """pe_heuristic's pipeline for one section -> (sigma, num_freqs, extras)."""
+    """The band heuristic's pipeline for one section -> (sigma, num_freqs, extras)."""
     import math as _m
     std = np.maximum(S_sec.std(axis=0), 1e-8)
     z = (S_sec - S_sec.mean(axis=0)) / std
@@ -43,9 +34,8 @@ def _pe_auto_one(PH, S_sec, rows, counts_file, a):
         h *= 1.5
     D = PH.robust_diameter(z)
     density = len(rows) / (_m.pi * (D / 2.0) ** 2)
-    # codex_2: CODEX intensities are already arcsinh+min-max scaled to [0,1];
-    # skip the CP10K/log1p normalisation (meaningless for non-count data) and
-    # z-score the raw values directly -- see lognorm_pcs's docstring.
+    # Intensity data is already scaled, so skip the CP10K/log1p normalisation
+    # and z-score the raw values directly. See lognorm_pcs.
     scores, _evr, _t = PH.lognorm_pcs(counts_file, rows, a.pe_auto_n_pcs,
                                       100_000, 20_000, 0,
                                       skip_norm=(getattr(a, "likelihood", "nb") == "gaussian"))
@@ -94,14 +84,12 @@ def resolve_pe_auto(a, S_np, batch_np, n_batches):
         except Exception as e:
             print(f"--pe_auto: cache unreadable ({e}) -> recomputing", flush=True)
 
-    # The heuristic is part of this package (it is the method, not a script),
-    # so it imports directly -- no sys.path walk-up needed.
     from . import heuristic as PH
 
     multi = n_batches and n_batches > 1
     prov, per_batch, sigma_o, nf_o, extras_o = {}, None, None, None, []
     if multi and a.pe_auto == "single":
-        # requested: auto only for single-section data; plain ladder for multi-batch
+        # Derive bands for single-section data only; multi-batch uses the plain ladder
         sigma_o, nf_o, extras_o = 0.18, 16, []
         prov["mode"] = "single -> multi-batch data, using the plain sigma=0.18/N=16 ladder"
         print("--pe_auto=single with multi-batch data: using sigma=0.18 num_freqs=16 "

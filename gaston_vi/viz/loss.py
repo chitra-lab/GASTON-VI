@@ -1,6 +1,5 @@
 """Training-curve plots.
 
-Moved verbatim from train.py (then seq_train_unified.py) (2026-09-29 modularisation, step 1).
 Pure plotting: no RNG, no model state, no side effects beyond writing files.
 """
 

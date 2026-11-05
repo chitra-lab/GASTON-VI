@@ -1,1 +1,1 @@
-"""GASTON-VI: spatial isodepth VAE."""
+"""GASTON-VI: spatial isodepth variational inference model."""

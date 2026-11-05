@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """GASTON-VI training entry point.
 
-Fits an isodepth VAE to spatial expression: per-batch spatial encoders map
-coordinates to a 1-D isodepth d, and the decoder factorises expression as
+Fits an isodepth variational inference model to spatial expression: per-batch
+spatial encoders map coordinates to a 1-D isodepth d, and the decoder factorises
+expression as
 
     log rho = f(d, condition) + h([z, batch])
 
-with a negative-binomial observation model. Training is two-phase: d alone for
---warmup_epochs, then the biological latent z is switched on.
+with a negative-binomial or Gaussian observation model. Training is two-phase:
+d alone for --warmup_epochs, then the biological latent z is switched on.
 
-Handles single-section AND joint multi-section data through one path -- pass
---batch_file to get per-batch spatial encoders, omit it for a single section.
+Pass --batch_file for joint multi-section training, with per-batch spatial
+encoders. Omit it for a single section.
 
 Model code lives in the `gaston_vi` package next to this file:
     gaston_vi/pe/        positional-encoding bands + the --pe_auto resolver
     gaston_vi/model/     encoders, the linear_hz decoder, the pyro model/guide,
-                         and the NB likelihood
-    gaston_vi/viz/       isodepth / latent / loss plots
-This script keeps argument parsing, data loading, the training loop, and result
-aggregation. Adapting the model to another modality (e.g. spatial proteomics)
-means editing the package, not this file -- see the "ADAPTATION SEAM" notes in
-gaston_vi/model/likelihood.py, gaston_vi/model/gaston_vi.py and
-gaston_vi/pe/auto.py.
+                         and the likelihoods
+                         gaston_vi/viz/       isodepth / latent / loss plots
+                         This script keeps argument parsing, data loading, the training loop, and result
+                         aggregation.
 
 POSITIONAL ENCODING. Coordinates are z-scored per batch, so wavelengths are in
 units of one coordinate s.d. The sigma ladder lambda_j = sigma^(-j/N) can only
@@ -30,8 +28,7 @@ on every dataset tested; sub-1u bands therefore have to come from
 --extra_wavelengths or --pe_auto. Three ways to set the bands:
 
     --sigma / --num_freqs [--extra_wavelengths]
-        Manual. With no extras this reproduces the original at_model.py
-        bit-for-bit (enforced by pe_heuristic/regression.py, case eq5).
+        Manual.
     --pe_per_batch_json PATH
         JSON {"<batch>": {"sigma": .., "num_freqs": .., "extra_wavelengths":
         [..]}, ...}. Each batch gets its own PE built from its own band set,
@@ -39,8 +36,9 @@ on every dataset tested; sub-1u bands therefore have to come from
         fixed s_dim. Cells are routed through their batch's PE exactly as they
         are routed through their batch's spatial encoder.
     --pe_auto {none,single,both} [--pe_cache PATH]
-        Derive the bands from the data via pe_heuristic.py. `single` applies it
-        to single-section data only and falls back to the plain sigma=0.18/N=16
+        Derive the bands from the data. This is the default, with `single`,
+        unless bands are set by hand. `single` applies it to single-section
+        data only and falls back to the plain sigma=0.18/N=16
         ladder when --batch_file is given; `both` also derives per-batch bands
         for joint data. --pe_cache memoises the result, keyed on a fingerprint
         of the counts/coords/batch files plus every heuristic knob.
@@ -48,9 +46,7 @@ on every dataset tested; sub-1u bands therefore have to come from
     Bands are ordered by DESCENDING frequency (ladder in native order, extras
     appended on the fine side) and stored in the checkpoint as `pe_freq_bands`
     (+ `pe_version`, `pe_band_order`); near-duplicates merge at 1e-4 relative.
-    Band ORDER is load-bearing -- it changes the seeded init and therefore the
-    whole trajectory. The older "v1" script sorted ascending and did NOT
-    reproduce at_model.py.
+    Band order changes the seeded initialisation and therefore the whole run.
 
 CONDITIONS. --condition_file is an optional .npy of integer condition labels,
 shape (N,), with each batch nested entirely within one condition. When given,
@@ -66,8 +62,7 @@ batch index it already receives.
     same anatomical depth as d=0.5 in another. Compare curves per condition; do
     not overlay them at "matched d" without a cross-condition anchor.
 
-Only the `linear_hz` decoder and 1-D isodepth are supported; the additive and
-combined decoders were removed 2026-09-28.
+Only the `linear_hz` decoder and 1-D isodepth are supported.
 """
 
 import os, sys, random, time
@@ -98,7 +93,7 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-# ============================================================torch
+# ============================================================
 # 0.  ARGS
 # ============================================================
 parser = argparse.ArgumentParser(description="GASTON-VI sequential training (batch-aware)")
@@ -108,7 +103,7 @@ parser.add_argument("--coords_file", type=str, required=True)
 parser.add_argument("--counts_file", type=str, required=True)
 parser.add_argument("--batch_file",  type=str, default=None,
     help="Optional .npy of integer batch indices, shape (N,). "
-         "If provigded, scVI encoders are conditioned on batch.")
+         "If provided, scVI encoders are conditioned on batch.")
 parser.add_argument("--condition_file", type=str, default=None,
     help="Optional .npy of integer condition labels, shape (N,) (e.g. "
          "0=healthy, 1=diseased). Each batch must lie entirely within one "
@@ -119,14 +114,15 @@ parser.add_argument("--condition_file", type=str, default=None,
 # -- model --
 parser.add_argument("--z_dim", type=int, default=0)
 parser.add_argument("--n_isodepth", type=int, default=1)
-parser.add_argument("--sigma", type=float, default=None, help="required unless --pe_per_batch_json")
-parser.add_argument("--num_freqs", type=int, default=None, help="required unless --pe_per_batch_json")
+parser.add_argument("--sigma", type=float, default=None, help="set by hand with --num_freqs; replaces the --pe_auto default")
+parser.add_argument("--num_freqs", type=int, default=None, help="set by hand with --sigma; replaces the --pe_auto default")
 parser.add_argument("--pe_per_batch_json", type=str, default=None,
     help="per-batch PE spec JSON (see module docstring); requires --batch_file")
-parser.add_argument("--pe_auto", choices=["none", "single", "both"], default="none",
-    help="derive the PE band set from the data with pe_heuristic instead of "
+parser.add_argument("--pe_auto", choices=["none", "single", "both"], default=None,
+    help="derive the PE band set from the data instead of "
          "passing --sigma/--num_freqs/--extra_wavelengths by hand.  "
-         "'none' (default) = explicit flags, current behaviour.  "
+         "Defaults to 'single', or to 'none' if bands are set by hand.  "
+         "'none' = explicit flags.  "
          "'single' = auto ONLY for single-section data; multi-batch data falls "
          "back to the plain sigma=0.18 / num_freqs=16 ladder.  "
          "'both' = auto everywhere, deriving one PE PER BATCH when a batch_file "
@@ -157,17 +153,15 @@ parser.add_argument("--extra_wavelengths_geomspace", type=str, default="",
          "log-spaced wavelengths from lo to hi inclusive, e.g. "
          "\"0.15,2.12,26\". Combined with --extra_wavelengths if both given. "
          "Empty = none.")
-parser.add_argument("--beta", type=float, required=True)
+parser.add_argument("--beta", type=float, default=0.01)
 parser.add_argument("--hidden_dim_spatial", type=int, default=None,
                     help="width of each spatial encoder. Default depends on the "
                          "data: 64 when --batch_file is given (multi-batch, one "
-                         "encoder per section), 20 for a single section. Every "
-                         "joint result in this project used 64, so do not leave "
-                         "this at the single-section width for joint runs.")
+                         "encoder per section), 20 for a single section.")
 parser.add_argument("--hidden_dim_decoder", type=int, default=20)
 
 # -- training --
-parser.add_argument("--warmup_epochs", type=int, default=50)
+parser.add_argument("--warmup_epochs", type=int, default=100)
 parser.add_argument("--epochs",     type=int,   default=175)
 parser.add_argument("--repeats",    type=int,   default=1)
 parser.add_argument("--rep_offset", type=int,   default=0,
@@ -183,19 +177,17 @@ parser.add_argument("--results_dir", type=str, required=True)
 # -- decoder type --
 parser.add_argument("--decoder_type", type=str, default="linear_hz",
     choices=["linear_hz"],
-    help="only linear_hz remains; the combined and additive decoders were "
-         "removed 2026-09-28 (unused in 323/323 runs)")
+    help="only linear_hz is supported")
 parser.add_argument("--gene_names_file", type=str, default=None)
 parser.add_argument("--likelihood", type=str, default="nb", choices=["nb", "gaussian"],
-    help="'gaussian' is the CODEX/proteomics branch for data that is already "
-         "arcsinh + per-protein min-max scaled to [0,1] (not raw counts); see "
-         "gaston_vi/model/gaston_vi.py's ADAPTATION SEAM note and "
-         "gaston_vi/preprocess/codex.py for the preprocessing it expects.")
+    help="'gaussian' is for continuous data such as protein intensities, "
+         "already scaled to [0,1] (not raw counts); see "
+         "gaston_vi/preprocess/codex.py.")
 
 # -- disentanglement --
-parser.add_argument("--di_method", type=str, default="none",
-    choices=["none", "simvi_mi", "simvi_mmd",
-             "simvi_mi_kl", "simvi_mmd_kl"])
+parser.add_argument("--di_method", type=str, default="simvi_mmd",
+    choices=["simvi_mmd"],
+    help="only simvi_mmd remains; use --di_weight 0 to turn the penalty off")
 parser.add_argument("--di_weight", type=float, default=0.01)
 
 # -- batch isodepth alignment --
@@ -271,6 +263,13 @@ def _parse_geomspace(spec):
 
 args = parser.parse_args()
 
+# Default to data-derived bands unless the bands were set by hand.
+if args.pe_auto is None:
+    _manual_bands = (args.sigma is not None or args.num_freqs is not None
+                     or args.pe_per_batch_json is not None
+                     or args.extra_wavelengths or args.extra_wavelengths_geomspace)
+    args.pe_auto = "none" if _manual_bands else "single"
+
 z_bio_dim          = args.z_dim
 decoder_type       = args.decoder_type
 n_isodepth         = args.n_isodepth
@@ -294,7 +293,7 @@ if args.pe_per_batch_json is not None:
     import json as _json
     with open(args.pe_per_batch_json) as _f:
         _raw = _json.load(_f)
-    _raw = _raw.get("per_batch_recommendation", _raw)   # accept the full pe_heuristic JSON too
+    _raw = _raw.get("per_batch_recommendation", _raw)   # also accept the full heuristic JSON
     pe_per_batch = {int(k): dict(sigma=float(v["sigma"]), num_freqs=int(v["num_freqs"]),
                                  extra_wavelengths=[float(x) for x in v.get("extra_wavelengths", [])])
                     for k, v in _raw.items()}
@@ -312,12 +311,8 @@ elif sigma is None or num_freqs is None:
     raise ValueError("--sigma and --num_freqs are required unless --pe_per_batch_json "
                      "or --pe_auto is given")
 beta               = args.beta
-# The spatial-encoder width depends on the data, so resolve it here rather than
-# in the slurm wrapper -- running train.py directly on multi-batch data used to
-# silently get the single-section width of 20, which is NOT the configuration any
-# joint result in this project was produced with. Passing the flag explicitly
-# still overrides, so this changes nothing for the existing runners (both always
-# pass it).
+# The spatial-encoder width depends on the data: 64 with --batch_file, 20 without.
+# Passing the flag explicitly overrides this.
 if args.hidden_dim_spatial is None:
     args.hidden_dim_spatial = 64 if args.batch_file is not None else 20
     print(f"--hidden_dim_spatial not given -> {args.hidden_dim_spatial} "
@@ -368,7 +363,7 @@ print(f"Device: {device}", flush=True)
 # 1.  OUTPUT DIRECTORIES
 # ============================================================
 RESULTS_DIR     = args.results_dir
-di_tag          = f"di_{di_method}_w{di_weight}" if di_method != "none" else "di_none"
+di_tag          = f"di_{di_method}_w{di_weight}"
 warmup_tag      = f"warmup{WARMUP_EPOCHS}"
 epoch_tag       = f"ep{EPOCHS}"
 dec_tag         = f"dec_{decoder_type}"
@@ -416,10 +411,10 @@ else:
           flush=True)
 
 # -- condition annotation (optional) --
-# Used ONLY to restrict the cross-batch isodepth MMD alignment to batches that
-# share a condition (e.g. healthy vs diseased). Not fed to encoders/decoder.
-# Expects a per-spot vector of length N (parallel to batch_file); each batch is
-# assumed nested within a single condition, which is asserted below.
+# Restricts the cross-batch isodepth MMD alignment to batches that share a
+# condition (e.g. healthy vs diseased) and gives each condition its own f(d).
+# Expects a per-spot vector of length N (parallel to batch_file); each batch must
+# lie within a single condition, which is asserted below.
 if args.condition_file is not None:
     print(f"Loading condition from: {args.condition_file}", flush=True)
     condition_np = np.load(args.condition_file).astype(np.int64).reshape(-1)
@@ -478,17 +473,15 @@ else:
 # ============================================================
 # 3.  HELPERS
 # ============================================================
-# The NB log-density itself lives in the package (it is the adaptation seam);
-# the loops that apply it are harness and stay here, next to extract_latents.
+# The log-densities themselves live in gaston_vi.model.likelihood.
 from gaston_vi.model import nb_log_prob, gaussian_log_prob            # noqa: E402
 
 
 def iterate_minibatches(X, S, batch_size, B=None, shuffle=True):
     """Yields (x, s, b) tuples; b is None if no batch vector is provided.
 
-    The shuffle draws from the global torch RNG seeded by set_seed(), so the
-    iteration order is part of the seeded trajectory -- do not switch it to
-    numpy or a local Generator without re-running pe_heuristic/regression.py.
+    The shuffle draws from the global torch RNG seeded by set_seed(), so
+    switching it to numpy or a local Generator changes seeded results.
     """
     N   = X.shape[0]
     idx = torch.randperm(N) if shuffle else torch.arange(N)
@@ -616,9 +609,8 @@ def print_per_batch_isodepth_scale(model, S, B, batch_size, tag=""):
 # ============================================================
 # 3b. REGULARISATION TERMS  (gaston_vi.model.losses)
 # ============================================================
-# Disentanglement (--di_method) and cross-batch isodepth alignment
-# (--batch_align_weight). Both consume the global torch RNG, so they are
-# part of the seeded trajectory.
+# Disentanglement (--di_weight) and cross-batch isodepth alignment
+# (--batch_align_weight). Both consume the global torch RNG.
 from gaston_vi.model.losses import (compute_disentanglement_reg,       # noqa: E402
                                     compute_batch_d_mmd,
                                     _spatial_encoder_params,
@@ -627,8 +619,6 @@ from gaston_vi.model.losses import (compute_disentanglement_reg,       # noqa: E
 # ============================================================
 # 4.  POSITIONAL ENCODING  (gaston_vi.pe)
 # ============================================================
-# The band ladder and the --pe_auto resolver live in the package so this
-# trainer and the scoring/diagnostic scripts share one definition.
 from gaston_vi.pe import (LogFrequencyPositionalEncoding,        # noqa: E402
                           BatchedPositionalEncoding)
 from gaston_vi.pe.auto import resolve_pe_auto                    # noqa: E402
@@ -637,8 +627,6 @@ from gaston_vi.pe.auto import resolve_pe_auto                    # noqa: E402
 # 5.  MODEL  (gaston_vi.model)
 # ============================================================
 # Encoders, the linear_hz decoder and the GASTON_VI pyro model/guide.
-# gaston_vi/model/likelihood.py and the dist.GammaPoisson site inside
-# GASTON_VI.model() are the spatial-proteomics adaptation seam.
 from gaston_vi.model import GASTON_VI, linear_z_importance            # noqa: E402
 
 # ============================================================
@@ -704,21 +692,12 @@ train_batch   = B_full[train_idx] if B_full is not None else None
 eps = 1e-8
 
 # ---------------- COORDINATE NORMALISATION ----------------
-# This block defines the PROJECT'S UNIT SYSTEM. Coordinates are z-scored, so
-# every PE wavelength downstream is measured in units of one coordinate
-# standard deviation ("u"), not microns -- which is why the sigma ladder's
-# floor of 1.1131 u is comparable across platforms at all, and why the
-# zonation scale comes out at 0.08-0.17 u everywhere.
-#
-# Two things here are deliberate and easy to "fix" by mistake:
-#   * The mean/std are computed on the TRAIN SPLIT ONLY and then applied to the
-#     full array (S_full_norm). Using full-data statistics would leak the
-#     validation split into the transform.
-#   * With batches, the scaling is PER BATCH. Each section is standardised by
-#     its own s.d., so 1 u is a slightly different physical distance in each
-#     batch. Per-batch spatial encoders absorb that, but it means a per-batch
-#     PE wavelength is only comparable across sections up to each section's
-#     own scale -- do not read a shared lambda as a shared physical length.
+# Coordinates are z-scored, so PE wavelengths are in units of one coordinate
+# standard deviation ("u"), not microns.
+#   * The mean/std come from the train split only, so the validation split does
+#     not leak into the transform.
+#   * With batches, scaling is per batch, so 1 u is a slightly different physical
+#     distance in each section.
 if B_full is not None:
     s_dim_raw = train_spatial.shape[1]
     train_spatial_mean = torch.zeros(n_batches, s_dim_raw,
@@ -807,13 +786,8 @@ print(f"Encoded spatial dim: {s_dim}", flush=True)
 # Empirical N(mean, var) prior on log library size, fitted per batch (batches
 # differ in sequencing depth) and passed to the model as the log_lib_mean /
 # log_lib_var buffers. Also computed on the train split only.
-#
-# ADAPTATION SEAM (spatial proteomics): total counts per cell is a
-# count-data notion. Intensity data has no library size, so an adaptation
-# either drops this latent entirely or replaces it with whatever per-cell
-# scale factor is appropriate. This is the fourth count assumption, alongside
-# gaston_vi/model/likelihood.py, the GammaPoisson site in
-# gaston_vi/model/gaston_vi.py, and lognorm_pcs in gaston_vi/pe/auto.py.
+# The Gaussian likelihood ignores it, but it is still fitted so the checkpoint
+# layout stays the same.
 lib_sizes = train_gene.sum(dim=1)
 log_lib   = torch.log(lib_sizes + eps)
 
@@ -897,7 +871,7 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
     )
 
     di_optimizer = None
-    if di_method != "none" and z_bio_dim > 0 and di_weight != 0.0:
+    if z_bio_dim > 0 and di_weight != 0.0:
         di_optimizer = torch.optim.Adam(vae.parameters(), lr=1e-3)
 
     # Cross-batch isodepth alignment: optimiser restricted to spatial encoders.
@@ -1021,7 +995,7 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
             msg = f"  recon_train={recon_train:.5f}"
             if val_idx is not None:
                 msg += f"  recon_val={recon_val:.5f}"
-            if not phase1 and di_method != "none" and z_bio_dim > 0:
+            if not phase1 and z_bio_dim > 0:
                 msg += f"  di_reg={di_reg_history[-1]:.5f}"
             if batch_mmd_optimizer is not None:
                 msg += f"  batch_mmd={batch_mmd_history[-1]:.5f}"
@@ -1072,7 +1046,7 @@ for rep in range(REP_OFFSET, REP_OFFSET + REPEATS):
         },
         "sigma": sigma, "num_freqs": num_freqs,
         "extra_wavelengths": list(extra_wavelengths),
-        "pe_per_batch": pe_per_batch,          # None => shared PE (original behaviour)
+        "pe_per_batch": pe_per_batch,          # None => shared PE
         "pe_version": 2, "pe_band_order": "desc_freq",
         "pe_freq_bands": (pe_encoder.freq_bands.cpu().numpy() if hasattr(pe_encoder, "freq_bands")
                           else [pe.freq_bands.cpu().numpy() for pe in pe_encoder.pes]),

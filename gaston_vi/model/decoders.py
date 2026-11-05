@@ -1,27 +1,13 @@
 """Decoder: rho = softmax( f([d, condition]) + W.[z, batch] ) for NB; for
 Gaussian, rho = f([d, condition]) + W.[z, batch] directly, no softmax.
 
-`linear_hz` is the only decoder retained (323/323 runs used it); the additive
-and combined variants were deleted 2026-09-28. Keeping h LINEAR in z is what
-makes f(d) a separable, interpretable zonation curve -- a nonlinear h can
-absorb spatial signal, which is exactly what the `additive`/`combined`
-variants did.
+h is linear in z so that f(d) stays a separable, interpretable curve: a
+nonlinear h could absorb spatial signal.
 
-**apply_softmax (2026-10-06, ported from gaston_vi_codex_condf.py, the
-original bespoke CODEX script):** CODEX protein intensities are NOT
-compositional data the way counts are -- there is no real "fixed total
-protein budget" one channel's rise has to be balanced by another's fall the
-way sequencing depth forces a real constraint on count data. Forcing softmax
-onto 49 independently-scaled [0,1] intensities confirmed to produce a real
-artifact (2026-10 session): one dominant marker drags every other marker's
-f(d) curve down with it via the sum-to-1 constraint, regardless of that
-marker's own biology -- visible as several unrelated crypt/villus markers
-collapsing onto nearly the same curve shape. gaston_vi_codex_condf.py's own
-decoder docstring already said "CODEX: returns raw values -- no softmax" --
-this was a known-correct design choice in the original script that the
-modularized package's "minimal adjustments" port never carried over.
-`apply_softmax` defaults to True (unchanged NB behaviour); GASTON_VI sets it
-to `likelihood == "nb"`.
+Softmax is only used for count data. Protein intensities are not compositional,
+so a sum-to-1 constraint would let one dominant marker distort every other
+marker's f(d) curve. `apply_softmax` defaults to True, and GASTON_VI sets it to
+`likelihood == "nb"`.
 """
 import numpy as np
 import torch
@@ -113,8 +99,7 @@ class LinearBiologicalDecoder(nn.Module):
         return self.h_linear(z_in)
 
     def f_proportions(self, d, batch=None, condition=None):
-        """Despite the name (kept for call-site compatibility), this returns
-        raw f(d) values, not proportions, when apply_softmax=False."""
+        """Return f(d): proportions with softmax, raw values without it."""
         logits = self.f_logits(d, batch, condition)
         return torch.softmax(logits, dim=-1) if self.apply_softmax else logits
 

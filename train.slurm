@@ -1,43 +1,29 @@
 #!/bin/bash
 #SBATCH --job-name=gaston_vi_train
-#SBATCH --output=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/logs/unified_%j.out
-#SBATCH --error=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/logs/unified_%j.err
-#SBATCH --partition=l40s
-#SBATCH --mail-user=zning4@jh.edu
-#SBATCH --mail-type=END,FAIL
+#SBATCH --output=logs/%j.out
+#SBATCH --error=logs/%j.err
+#SBATCH --partition=<your_gpu_partition>
 #SBATCH --gres=gpu:1
 #SBATCH --time=6:00:00
 #SBATCH --mem=120G
 #SBATCH --cpus-per-task=2
 #
-# One run of train.py (single-section or joint, manual bands or --pe_auto).  Edit the block below and `sbatch train.slurm`.
+# One run of train.py (single-section or joint, manual bands or --pe_auto).  Set the partition above, the block below, and the conda lines after it, then run `sbatch train.slurm` from the repository root.
 
 # ======================= EDIT THIS BLOCK =======================
-DATA=/scratch/jhu/uchitra1/datasets/spatial-RNA/merfish/mouse_liver_merfish
+DATA=/path/to/data
 
-COORDS=$DATA/coords_mat_rep2_qc20.npy
-COUNTS=$DATA/counts_mat_rep2_qc20.npy
+COORDS=$DATA/coords.npy
+COUNTS=$DATA/counts.npy
 GENES=$DATA/gene_names.npy
 BATCH=                      # batch .npy for JOINT; leave EMPTY for single-section
 COND=                       # condition .npy, or leave empty
 
-# Results layout:  runs_unified/<dataset>/<single_b{N}|joint>/<pe_tag>/
-# Three levels, each answering one question: which data, single or joint, which PE.
-# Everything else (seeds, pe_source, band count, lambda_min, why the run was made)
-# is already inside summary_*.csv, so it does not belong in the path.  The old tree
-# had 15 top-level runs_* dirs keyed on the REASON for a run -- mouse joint ended up
-# split across runs_joint/ and runs_joint_v2/ with no overlap, and every scorer
-# needed a hand-written map of which tree held what.  One tree globs as
-# runs_unified/*/*/*/.
-RUNS=/scratch/jhu/uchitra1/projects/GASTON-VAE/sweep/scVI/interpretation/pe_heuristic/runs_unified
-DATASET_TAG=mouse
-SPLIT_TAG=single_b1         # single_b{N} for one section, or "joint"
-PE_TAG=pe_auto_single       # original | pe_auto_single | pe_auto_both | altB | ...
-RESULTS=$RUNS/$DATASET_TAG/$SPLIT_TAG/$PE_TAG
+RESULTS=/path/to/results
 
 # ---- how to choose the PE bands: pick ONE of the two blocks ----
 #
-# (A) AUTOMATIC -- derive from the data with pe_heuristic
+# (A) AUTOMATIC -- derive from the data
 #       none   : don't; use the manual block (B) below
 #       single : derive for single-section data; MULTI-BATCH input falls back to
 #                the plain sigma=0.18 / num_freqs=16 ladder
@@ -63,22 +49,21 @@ N_ISODEPTH=1
 EPOCHS=175
 WARMUP=100
 REPEATS=2                   # seeds
-BATCH_SIZE=2586
+BATCH_SIZE=2048
 VAL_FRAC=0.3
 BETA=0.01
 HIDDEN_DIM_SPATIAL=         # leave EMPTY to let train.py pick (64 joint / 20 single)
 HIDDEN_DIM_DECODER=20
-DECODER_TYPE=linear_hz      # linear_hz | additive | combined
+DECODER_TYPE=linear_hz      # only linear_hz is supported
 DI_METHOD=simvi_mmd
 DI_WEIGHT=0.01
 BATCH_ALIGN_WEIGHT=0.1
 # ===================== END OF EDIT BLOCK =======================
 
-source /home/jhu/zning4/miniconda3/etc/profile.d/conda.sh
-conda activate /home/jhu/zning4/miniconda3/envs/scvi-env
-# CODE_DIR is where train.py and the gaston_vi/ package live (this repo).
-# Override it to run a checkout elsewhere: CODE_DIR=/path/to/GASTON-VI sbatch ...
-CODE_DIR="${CODE_DIR:-/weka/scratch/jhu/uchitra1/projects/GASTON-VAE/FINAL_CODE}"
+source /path/to/miniconda3/etc/profile.d/conda.sh
+conda activate /path/to/env
+# CODE_DIR is where train.py lives. It defaults to the folder you submit from.
+CODE_DIR="${CODE_DIR:-$SLURM_SUBMIT_DIR}"
 SCRIPT="${CODE_DIR}/train.py"
 
 ARGS=()

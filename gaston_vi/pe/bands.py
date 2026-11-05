@@ -1,14 +1,10 @@
 """Positional encoding: coordinates -> sin/cos feature bands.
 
-Moved verbatim from train.py (then seq_train_unified.py) (2026-09-29 modularisation, step 2).
-Pure torch, no dependency on pe_heuristic -- runs that pass --sigma/--num_freqs/
---extra_wavelengths explicitly never touch pe.auto.
+Pure torch, with no dependency on the band heuristic: runs that pass --sigma/
+--num_freqs/--extra_wavelengths explicitly never touch pe.auto.
 
-Band ORDER is load-bearing: the ladder is kept in its native descending-frequency
-order and extras are appended on the fine side, then sorted+deduped ONLY when
-extras are present.  Sorting reverses the feature columns, which changes the
-seeded init and hence the whole trajectory -- no-extras runs must reproduce
-seq_train_additive_batch_d_condf_at_model.py bit-for-bit.
+Band order matters. Bands are kept in descending frequency, and reordering them
+changes the feature columns, the seeded initialisation and so the whole run.
 """
 import math
 
@@ -39,20 +35,11 @@ class LogFrequencyPositionalEncoding(nn.Module):
                                  dtype=torch.float32)
             bands = torch.cat([bands, extra])
 
-        # v2 BAND ORDER (2026-09-18): ONE list, ladder + extras, sorted by frequency
-        # DESCENDING (= wavelength ascending), then near-duplicates dropped. With no
-        # extras this is exactly the ladder's native order sigma**(j/N), j=1..N, so
-        # no-extras runs reproduce seq_train_additive_batch_d_condf_at_model.py
-        # bit-for-bit; with extras the 16 ladder columns keep that same order and
-        # the extras (all finer) follow on the fine side. The pre-v2 script sorted
-        # ASCENDING (only when extras were present), i.e. the mirror-image column
-        # order -- a different seeded init/trajectory, so v2 runs are NOT
-        # bit-for-bit reproductions of the earlier extras runs (same model family).
-        # De-dup tolerance 1e-4 RELATIVE (v2; was 1e-6): merges a 4-decimal
-        # geomspace endpoint such as 1.1131 with the ladder's exact finest band
-        # 0.18**(-1/16) = 1.1131289 (rel. gap 2.6e-5), which the old tolerance
-        # kept as a near-collinear duplicate. No real band pair is closer than
-        # ~1e-2 relative, so nothing else is affected.
+        # One list, ladder + extras, sorted by descending frequency (ascending
+        # wavelength), then near-duplicates dropped. With no extras this is the
+        # ladder's native order sigma**(j/N), j=1..N. The 1e-4 relative de-dup
+        # tolerance merges a rounded endpoint such as 1.1131 with the ladder's
+        # finest band 0.18**(-1/16) = 1.1131289.
         bands, _ = torch.sort(bands, descending=True)
         keep = torch.ones_like(bands, dtype=torch.bool)
         if bands.numel() > 1:

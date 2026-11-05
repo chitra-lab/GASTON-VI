@@ -1,5 +1,5 @@
 """Model components: encoders, decoder, the GASTON_VI pyro model, and the
-negative-binomial log-density (the spatial-proteomics adaptation seam)."""
+observation log-densities."""
 from .encoders import (SpatialEncoder, BatchedSpatialEncoder,
                        BiologicalEncoder, LibrarySizeEncoder)
 from .decoders import LinearBiologicalDecoder, linear_z_importance

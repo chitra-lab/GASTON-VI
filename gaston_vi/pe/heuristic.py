@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-pe_heuristic.py -- data-driven choice of the GASTON-VI positional-encoding band set.
+Data-driven choice of the GASTON-VI positional-encoding band set.
 
-Takes exactly what the training script
-(healthy_diseased/seq_train_additive_batch_d_condf_at_model_heuristic.py) takes:
+Takes the same inputs as train.py:
 
     --coords_file  (N,2) spatial coordinates (any physical unit, e.g. um)
     --counts_file  (N,G) raw counts
     --batch_file   optional (N,) integer batch labels
     --condition_file is accepted but ignored (it does not affect the PE)
 
-and returns the PE hyper-parameters that script consumes:
+and returns the PE hyper-parameters train.py uses:
 
     --sigma, --num_freqs           (the log-frequency ladder)
     --extra_wavelengths            (bands the ladder cannot reach)
@@ -19,7 +18,7 @@ Everything is expressed in the training script's NORMALISED coordinate units:
 coordinates are z-scored per batch, so 1 unit == 1 s.d. of that batch's
 coordinates and the band with wavelength lambda is sin/cos(2*pi*s/lambda).
 
-Heuristic (see README.md for the rationale):
+Heuristic:
 
   1. GEOMETRY, per batch (in normalised units)
        delta_nn  = median nearest-neighbour spacing            -> Nyquist floor
@@ -92,12 +91,9 @@ def lognorm_pcs(X_path, rows, n_pcs, n_fit, chunk, seed, skip_norm=False):
     """Library-size normalise + log1p + gene z-score, PCA (fit on <= n_fit random
     rows, project all `rows`). Streams the counts matrix in row chunks.
 
-    skip_norm: codex_2 (proteomics adaptation seam) -- CODEX intensities are
-    already arcsinh + per-protein min-max scaled to [0,1]; row sums are not a
-    library-size/depth signal, so CP10K scaling + log1p is meaningless and
-    would distort the data. When True, skip both and z-score the raw values
-    directly before PCA. The z-score + PCA steps below are modality-agnostic
-    and unchanged either way.
+    skip_norm: for data that is already scaled, such as protein intensities,
+    where row sums are not a library size. When True, skip CP10K scaling and
+    log1p, and z-score the raw values directly before PCA.
 
     Returns scores (len(rows), n_pcs), explained-variance ratio, gene stats."""
     from sklearn.decomposition import PCA
@@ -268,7 +264,7 @@ def main():
     ap.add_argument("--batch_file", default=None)
     ap.add_argument("--condition_file", default=None, help="accepted for CLI symmetry; ignored")
     ap.add_argument("--out_json", required=True)
-    # knobs of the heuristic (defaults are what the README describes)
+    # knobs of the heuristic
     ap.add_argument("--c_min", type=float, default=1.0,
                     help="lambda_min = c_min * ell_c (finest band relative to the expression correlation length)")
     ap.add_argument("--c_max", type=float, default=1.0,
@@ -375,8 +371,8 @@ def main():
     lam_max = max(v["lambda_max"] for v in per_batch.values())
     grid = band_grid(lam_min, lam_max, args.bands_per_octave)
     extras_str = ",".join(f"{x:.6g}" for x in grid["extra_wavelengths"])
-    # per-batch band sets (each batch's own [lambda_min, lambda_max]) for the
-    # per-batch-PE training variant (seq_train_perbatch_pe.py --pe_per_batch_json)
+    # per-batch band sets (each batch's own [lambda_min, lambda_max]), for
+    # train.py --pe_per_batch_json
     per_batch_rec = {}
     for b, v in per_batch.items():
         g = band_grid(v["lambda_min"], v["lambda_max"], args.bands_per_octave)

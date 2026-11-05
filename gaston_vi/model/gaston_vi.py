@@ -1,13 +1,11 @@
 """The GASTON-VI model: pyro model/guide over (isodepth d, latent z, library l).
 
-log rho = f(d, condition) + h(z, batch), observed through a negative binomial.
-Two-phase training (see train.py): phase 1 fits d alone, then z is switched on.
+log rho = f(d, condition) + h(z, batch), observed through a negative binomial
+for counts or a Gaussian for continuous data. Two-phase training (see train.py):
+phase 1 fits d alone, then z is switched on.
 
-=== ADAPTATION SEAM (spatial proteomics) ===
-The generative likelihood is the `pyro.sample("obs", dist.GammaPoisson(...))`
-line in `model()` below, together with the `theta_g` pyro.param above it.
-Changing it must be done in step with `nb_log_prob` in likelihood.py, which is
-the evaluation-side copy of the same distribution. See that module's docstring.
+Each likelihood appears twice: the `obs` site in `model()` below and its
+evaluation-side log-density in likelihood.py. Keep the two in sync.
 
 Only 1-D isodepth is used in practice, but the n_isodepth>1 branches are kept
 because the checkpoint/latent layout depends on them.
@@ -43,14 +41,10 @@ class GASTON_VI(nn.Module):
         self.beta         = beta
         self.n_batches    = n_batches
         self.n_conditions = n_conditions
-        # Ported from gaston_vi_codex_condf.py (not in this package before):
-        # clamps d to [-d_tail_cutoff, d_tail_cutoff] before the decoder sees
-        # it (0 disables). A safety net against the decoder extrapolating for
-        # outlier d; paired with --d_tail_weight's penalty in train.py, which
-        # discourages those outliers from being produced in the first place.
+        # Clamps d to [-d_tail_cutoff, d_tail_cutoff] before the decoder sees it
+        # (0 disables), so the decoder does not extrapolate for outlier d.
         self.d_tail_cutoff = d_tail_cutoff
-        # codex_2 (2026-09-29): "gaussian" is the CODEX/proteomics branch --
-        # see the ADAPTATION SEAM note below and likelihood.py.
+        # "gaussian" is for continuous data such as protein intensities.
         assert likelihood in ("nb", "gaussian"), likelihood
         self.likelihood = likelihood
 
@@ -88,8 +82,7 @@ class GASTON_VI(nn.Module):
                                               n_hidden_lib, dropout_rate,
                                               n_batches=n_batches)
 
-        # linear_hz is the only decoder in use (323/323 runs); the additive and
-        # combined variants were removed 2026-09-28.
+        # linear_hz is the only supported decoder.
         if decoder_type != "linear_hz":
             raise ValueError(f"decoder_type={decoder_type!r} is no longer supported; "
                              "only 'linear_hz' remains")
@@ -98,9 +91,8 @@ class GASTON_VI(nn.Module):
             n_batches=n_batches,
             n_conditions=n_conditions,
             batch_to_condition=batch_to_condition,
-            # ported from gaston_vi_codex_condf.py: CODEX/gaussian data is not
-            # compositional, so no softmax there; NB keeps softmax (rho = each
-            # gene's share of the library, as the generative model assumes).
+            # Gaussian data is not compositional, so no softmax there. NB keeps
+            # softmax: rho is each gene's share of the library.
             apply_softmax=(likelihood == "nb"))
         print(f"Decoder: {decoder_type}", flush=True)
         if n_batches > 0:
@@ -175,11 +167,9 @@ class GASTON_VI(nn.Module):
                     dist.GammaPoisson(concentration=theta, rate=rate).to_event(1),
                     obs=x)
             else:
-                # CODEX intensities have no depth/library-size concept (see
-                # dataset_info.txt: already arcsinh + per-protein min-max
-                # scaled to [0,1]), so the mean is the decoder output alone --
-                # `l`/log_l is still sampled (keeps the guide/checkpoint
-                # layout identical) but does not enter the observation.
+                # Intensity data has no library size, so the mean is the decoder
+                # output alone. `l` is still sampled to keep the guide and
+                # checkpoint layout identical, but it does not enter the observation.
                 mu    = rho
                 sigma = sigma_g.unsqueeze(0).expand_as(mu)
                 pyro.sample("obs", dist.Normal(mu, sigma).to_event(1), obs=x)
