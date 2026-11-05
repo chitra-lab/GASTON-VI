@@ -15,8 +15,6 @@ and `z` carries the rest of the biological variation.
 | `gaston_vi/viz/` | isodepth, latent and loss plots |
 | `smoke_test.py` | exercises every package entry point on synthetic arrays in ~10 s |
 | `train.slurm` | slurm wrapper for one `train.py` run; edit the parameter block at the top and `sbatch` |
-| `old_code/GASTON_VI.py` | the previous single-script implementation, kept as the reference |
-| `old_code/GASTON_VI.slurm` | its runner (note: it invokes an absolute path in the original project tree, not the file beside it) |
 
 `train.py` puts its own directory on `sys.path`, so it runs from any working
 directory as long as `gaston_vi/` sits beside it.
@@ -62,11 +60,6 @@ explicitly and `--pe_auto` derives from the data.
 `--pe_cache <json>` memoises the derived bands against a fingerprint of the
 input files and every knob, so a regenerated counts file invalidates the entry.
 `pe_source` and `pe_auto_prov` are recorded in the run's summary CSV.
-
-## Relationship to `old_code/`
-
-`train.py` replaces the eight or nine near-duplicate training scripts that
-preceded it; `old_code/GASTON_VI.py` is the last single-file generation.
 
 ## CODEX / spatial-proteomics modality (`--likelihood gaussian`)
 
