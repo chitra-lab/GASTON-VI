@@ -7,21 +7,11 @@ modality.
 
 GASTON-VI jointly learns:
 
-* a spatial coordinate, the *isodepth* `d`, for each individual tissue slice
-* 1-D *spatial modality functions* `f(d)`, which describe molecular gradients along
-  the isodepth for tissues of the same biological condition
+* a spatial coordinate, the *isodepth* `d`, for each cell that captures the spatial axis across batches
+* 1-D *spatial modality functions*, which describe molecular gradients along
+  the isodepth
 * a cell state vector for each cell, which captures additional cell-intrinsic
   variation such as cell types
-
-This makes it possible to analyze:
-
-* **Multiple samples:** learn across many tissue slices together, using a latent
-  variable model to account for batch effects.
-* **Multiple conditions:** learn spatial modality functions that differ across
-  biological conditions.
-* **Differential spatial gradients:** compare how molecular gradients change
-  between conditions.
-* **Any molecular modality:** for example, transcriptomics or proteomics.
 
 ## Installation
 
