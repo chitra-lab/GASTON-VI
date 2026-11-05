@@ -1,12 +1,27 @@
 # GASTON-VI
 
-GASTON-VI is a variational inference model that learns a 1-D *isodepth* `d` for
-a tissue section from spatial molecular data. It applies to any molecular
-modality, and we demonstrate it on spatial transcriptomics and proteomics data.
-Expression is modelled as `softmax(f(d) + W·[z, batch])`, so `f(d)` gives an
-interpretable spatial gradient for each feature (e.g. a gene or protein), and
-the latent `z` captures the remaining biological variation. It can be trained on
-one section or jointly on several.
+GASTON-VI is a variational inference (VI)-based deep learning model that
+efficiently learns an underlying spatial axis, and molecular gradients along this
+axis, from multi-sample, multi-condition spatial-omics data of any molecular
+modality.
+
+GASTON-VI jointly learns:
+
+* a spatial coordinate, the *isodepth* `d`, for each individual tissue slice
+* 1-D *spatial modality functions* `f(d)`, which describe molecular gradients along
+  the isodepth for tissues of the same biological condition
+* a cell state vector for each cell, which captures additional cell-intrinsic
+  variation such as cell types
+
+This makes it possible to analyze:
+
+* **Multiple samples:** learn across many tissue slices together, using a latent
+  variable model to account for batch effects.
+* **Multiple conditions:** learn spatial modality functions that differ across
+  biological conditions.
+* **Differential spatial gradients:** compare how molecular gradients change
+  between conditions.
+* **Any molecular modality:** for example, transcriptomics or proteomics.
 
 ## Installation
 
@@ -89,13 +104,13 @@ sbatch train.slurm
 
 | flag | meaning |
 |---|---|
-| `--z_dim` | size of the latent `z` |
+| `--z_dim` | size of the cell state vector |
 | `--beta` | KL weight (default `0.01`) |
 | `--batch_size` | minibatch size (required) |
 | `--pe_auto` | how to set the positional-encoding bands. The default, `single`, derives them from the data for one section, and uses fixed bands (`sigma=0.18`, `num_freqs=16`) for several sections. To set them by hand, pass `--sigma` and `--num_freqs` instead |
-| `--epochs`, `--warmup_epochs` | total and warm-up epochs (defaults `175` and `100`). `z` only trains after warm-up, so keep `--warmup_epochs` below `--epochs` |
+| `--epochs`, `--warmup_epochs` | total and warm-up epochs (defaults `175` and `100`). The cell state vector only trains after warm-up, so keep `--warmup_epochs` below `--epochs` |
 | `--repeats` | number of random seeds |
-| `--di_weight` | weight of the penalty that keeps `z` separate from `d` (default `0.01`; `0` turns it off) |
+| `--di_weight` | weight of the penalty that keeps the cell state vector separate from the isodepth (default `0.01`; `0` turns it off) |
 | `--condition_file` | optional `(N,)` integer labels, such as healthy or diseased, to learn a separate `f(d)` per condition. Each batch must lie within one condition |
 
 Run `python train.py --help` for all options.
@@ -107,8 +122,8 @@ Each run writes these under `--results_dir`, with one `rep{i}` per seed:
 | path | contents |
 |---|---|
 | `dec_linear_hz/latents/<run>/rep1/d_mu.npy` | isodepth for each cell |
-| `dec_linear_hz/latents/<run>/rep1/z_mu.npy` | latent `z` for each cell |
-| `dec_linear_hz/latent_plots/<run>/rep1/` | isodepth and `z` plots |
+| `dec_linear_hz/latents/<run>/rep1/z_mu.npy` | cell state vector for each cell |
+| `dec_linear_hz/latent_plots/<run>/rep1/` | isodepth and cell state vector plots |
 | `dec_linear_hz/loss_plots/` | training curves |
 | `dec_linear_hz/models/*.pt` | model checkpoints |
 | `summary_*.csv` | final losses and run settings |
