@@ -144,6 +144,13 @@ genes = ckpt["gene_names"]
 values for `--likelihood gaussian`. If you trained with `--condition_file`, pass
 `condition=<label>` to `f_proportions`.
 
+## Tutorials
+
+This notebook walks through mouse liver MERFISH data, from the raw download to training, the
+isodepth, AUPRC, and `f(d)` curves:
+
+* [Single slice](notebooks/liver_tutorial.ipynb)
+
 ## Support
 
 For questions or bugs, please open a GitHub issue.
