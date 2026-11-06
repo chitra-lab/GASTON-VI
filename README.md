@@ -103,7 +103,7 @@ sbatch train.slurm
 | `--epochs`, `--warmup_epochs` | total and warm-up epochs (defaults `175` and `100`). The cell state vector only trains after warm-up, so keep `--warmup_epochs` below `--epochs` |
 | `--repeats` | number of random seeds |
 | `--di_weight` | weight of the penalty that keeps the cell state vector separate from the isodepth (default `0.01`; `0` turns it off) |
-| `--condition_file` | optional `(N,)` integer labels, such as healthy or diseased, to learn a separate `f(d)` per condition. Each batch must lie within one condition |
+| `--condition_file` | optional `(N,)` integer labels, such as healthy or diseased, to learn a separate `h_m(d;c)` per condition. Each batch must lie within one condition |
 
 Run `python train.py --help` for all options.
 
@@ -147,7 +147,7 @@ values for `--likelihood gaussian`. If you trained with `--condition_file`, pass
 ## Tutorials
 
 This notebook walks through mouse liver MERFISH data, from the raw download to training, the
-isodepth, AUPRC, and `f(d)` curves:
+isodepth, AUPRC, and `h_g(d)` curves:
 
 * [Single slice](notebooks/liver_tutorial.ipynb)
 
