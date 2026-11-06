@@ -8,9 +8,9 @@ modality.
 GASTON-VI jointly learns:
 
 * a spatial coordinate, the *isodepth* `d`, for each cell that captures the spatial axis across batches
-* 1-D *spatial modality functions*, which describe molecular gradients along
+* 1-D *spatial modality functions* 'h_m(d;c)', which describe molecular gradients along
   the isodepth
-* a cell state vector for each cell, which captures additional cell-intrinsic
+* a cell state vector 'w' for each cell, which captures additional cell-intrinsic
   variation such as cell types
 
 ![](gaston_vi_overview.png)
