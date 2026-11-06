@@ -70,8 +70,7 @@ python train.py \
   --z_dim 4 --batch_size 2048 --results_dir out/
 ```
 
-**Several sections:** add `--batch_file batch.npy`. To put the sections on a
-shared isodepth scale, also set `--batch_align_weight`.
+**Several sections:** add `--batch_file batch.npy`. also set `--batch_align_weight` (0.1 recommended).
 
 **Protein data (e.g. CODEX):** scale the intensities first, once per anatomical
 region, then add `--likelihood gaussian` to the training command:
