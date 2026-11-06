@@ -120,7 +120,7 @@ Each run writes these under `--results_dir`, with one `rep{i}` per seed:
 | `dec_linear_hz/models/*.pt` | model checkpoints |
 | `summary_*.csv` | final losses and run settings |
 
-To get each gene's `f(d)` curve, run this from the repository root:
+To get each molecular feature's `h_m(d)` curve, run this from the repository root:
 
 ```python
 import glob
