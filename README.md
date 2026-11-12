@@ -83,6 +83,9 @@ scaled, _ = preprocess_codex(raw_intensities)  # (N, n_proteins)
 np.save("counts.npy", scaled)
 ```
 
+See the [CODEX tutorial](notebooks/codex_tutorial.ipynb) for a full example, including
+`--condition_file` for learning per-region curves and the differential gradient score.
+
 On a Slurm cluster, fill in the partition, paths, and conda environment in
 `train.slurm`, then run this from the repository root:
 
@@ -145,10 +148,11 @@ values for `--likelihood gaussian`. If you trained with `--condition_file`, pass
 
 ## Tutorials
 
-This notebook walks through mouse liver MERFISH data, from the raw download to training, the
-isodepth, AUPRC, and `h_g(d)` curves:
-
-* [Single slice](notebooks/liver_tutorial.ipynb)
+* [Single slice, mouse liver MERFISH](notebooks/liver_tutorial.ipynb): raw download to
+  training, the isodepth, AUPRC, and `h_g(d)` curves, for count data.
+* [Human intestine CODEX](notebooks/codex_tutorial.ipynb): protein data with
+  `--likelihood gaussian`, joint training across 64 batches with a
+  `--condition_file`, and the differential gradient score `DG_m`.
 
 ## Support
 
